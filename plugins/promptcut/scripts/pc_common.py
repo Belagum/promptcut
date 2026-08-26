@@ -24,11 +24,11 @@ SPEND_LOG = HOME / "spend.jsonl"
 
 DEFAULT_CONFIG = {
     "openrouter_api_key": "",
-    "image_model": "bytedance-seed/seedream-4.5",
+    "image_model": "bytedance-seed/seedream-5-0-pro",
     "image_resolution": "2K",
     "image_format": "png",
     "tts_provider": "openrouter",          # openrouter | edge | none
-    "tts_model": "openai/gpt-4o-mini-tts-2025-12-15",
+    "tts_model": "openai/gpt-audio-mini",
     "tts_voice": "alloy",
     "edge_voice": "ru-RU-DmitryNeural",
     "transcribe_model": "openai/whisper-1",

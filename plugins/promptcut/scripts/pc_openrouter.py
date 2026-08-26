@@ -17,6 +17,10 @@ RETRY_STATUS = {408, 409, 425, 429, 500, 502, 503, 504, 520, 522, 524}
 BACKOFF = (3, 8, 20)
 
 
+class OpenRouterError(RuntimeError):
+    """Recoverable API failure (raised instead of exiting when soft=True)."""
+
+
 def _headers(cfg: dict, key: str, json_body: bool = True) -> dict:
     h = {
         "Authorization": f"Bearer {key}",
@@ -47,7 +51,7 @@ def _explain(status: int, body: str) -> str:
 
 
 def _request(method: str, path: str, *, cfg: dict, payload=None, timeout=180,
-            raw: bool = False, attempts: int = 4):
+            raw: bool = False, attempts: int = 4, soft: bool = False):
     key = api_key(cfg)
     if not key:
         die("no OpenRouter key. Set it: setx OPENROUTER_API_KEY sk-or-... "
@@ -55,6 +59,12 @@ def _request(method: str, path: str, *, cfg: dict, payload=None, timeout=180,
     url = f"{BASE}{path}"
     data = json.dumps(payload).encode("utf-8") if payload is not None else None
     last = ""
+
+    def fail(msg):
+        if soft:
+            raise OpenRouterError(msg)
+        die(msg)
+
     for i in range(attempts):
         req = urllib.request.Request(url, data=data, method=method,
                                      headers=_headers(cfg, key, json_body=data is not None))
@@ -73,7 +83,7 @@ def _request(method: str, path: str, *, cfg: dict, payload=None, timeout=180,
                 warn(f"{last} - retrying in {wait}s")
                 time.sleep(wait)
                 continue
-            die(last)
+            return fail(last)
         except (urllib.error.URLError, TimeoutError) as exc:
             last = f"network unreachable: {exc}"
             if i < attempts - 1:
@@ -81,8 +91,8 @@ def _request(method: str, path: str, *, cfg: dict, payload=None, timeout=180,
                 warn(f"{last} - retrying in {wait}s")
                 time.sleep(wait)
                 continue
-            die(last)
-    die(last or "request failed for an unknown reason")
+            return fail(last)
+    return fail(last or "request failed for an unknown reason")
 
 
 def generate_image(prompt: str, out_path: Path, *, cfg: dict, model: str | None = None,
@@ -123,29 +133,132 @@ def generate_image(prompt: str, out_path: Path, *, cfg: dict, model: str | None 
     return out_path
 
 
-def synth_speech(text: str, out_path: Path, *, cfg: dict, model: str | None = None,
-                 voice: str | None = None, speed: float | None = None,
-                 instructions: str | None = None) -> Path:
-    model = model or cfg["tts_model"]
-    payload = {
-        "model": model,
-        "input": text,
-        "voice": voice or cfg.get("tts_voice") or "alloy",
-        "response_format": "mp3",
-    }
+MUSIC_ONLY_MARKERS = ("lyria", "music", "suno", "riffusion")
+
+
+def list_tts_models(cfg: dict) -> dict:
+    """Audio-output models that can speak (music generators filtered out)."""
+    models = [m for m in list_models(cfg, "audio")
+              if m.get("id") and not any(t in m["id"] for t in MUSIC_ONLY_MARKERS)]
+    return {"models": models, "auto_pick": _pick_tts_id([m["id"] for m in models])}
+
+
+def _pick_tts_id(ids: list) -> str | None:
+    for marker in ("gpt-audio-mini", "gpt-audio", "-tts", "tts-"):
+        for i in ids:
+            if marker in i:
+                return i
+    return ids[0] if ids else None
+
+
+def _synth_speech_endpoint(model, text, out_path, *, cfg, voice, speed, instructions) -> Path:
+    payload = {"model": model, "input": text, "voice": voice, "response_format": "mp3"}
     if speed and abs(speed - 1.0) > 1e-3:
         payload["speed"] = float(speed)
     if instructions:
         payload["instructions"] = instructions
-    raw, gen_id = _request("POST", "/audio/speech", cfg=cfg, payload=payload,
-                           timeout=180, raw=True)
+    raw, _ = _request("POST", "/audio/speech", cfg=cfg, payload=payload,
+                      timeout=180, raw=True, soft=True)
     if not raw or len(raw) < 512:
-        die(f"empty speech payload (model {model}, {len(raw or b'')} bytes)")
-    out_path = out_path.with_suffix(".mp3")
-    out_path.parent.mkdir(parents=True, exist_ok=True)
+        raise OpenRouterError(f"empty speech payload (model {model}, {len(raw or b'')} bytes)")
     out_path.write_bytes(raw)
     log_spend("tts", model, None, text[:120])
     return out_path
+
+
+def _synth_chat_audio(model, text, out_path, *, cfg, voice, speed, instructions) -> Path:
+    # chat-audio models only speak over a streaming request (pcm16 chunks)
+    system = ("You are a text-to-speech engine. Read the user's text aloud exactly as "
+              "written, verbatim and completely, in the language it is written in. "
+              "Never add, skip, translate or comment on anything.")
+    if instructions:
+        system += f" Delivery style: {instructions}"
+    payload = {
+        "model": model,
+        "modalities": ["text", "audio"],
+        "audio": {"voice": voice, "format": "pcm16"},
+        "stream": True,
+        "messages": [{"role": "system", "content": system},
+                     {"role": "user", "content": text}],
+        "usage": {"include": True},
+    }
+    key = api_key(cfg)
+    if not key:
+        die("no OpenRouter key. Set it: setx OPENROUTER_API_KEY sk-or-... "
+            "or run /promptcut:setup")
+    req = urllib.request.Request(f"{BASE}/chat/completions",
+                                 data=json.dumps(payload).encode("utf-8"),
+                                 headers=_headers(cfg, key), method="POST")
+    pcm, cost = bytearray(), None
+    try:
+        with urllib.request.urlopen(req, timeout=600) as resp:
+            for line_bytes in resp:
+                line = line_bytes.decode("utf-8", "replace").strip()
+                if not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if data == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(data)
+                except json.JSONDecodeError:
+                    continue
+                if (chunk.get("usage") or {}).get("cost") is not None:
+                    cost = chunk["usage"]["cost"]
+                delta = ((chunk.get("choices") or [{}])[0].get("delta")) or {}
+                b64 = (delta.get("audio") or {}).get("data")
+                if b64:
+                    pcm.extend(base64.b64decode(b64))
+    except urllib.error.HTTPError as exc:
+        raise OpenRouterError(_explain(exc.code, exc.read().decode("utf-8", "replace")))
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise OpenRouterError(f"network unreachable: {exc}")
+    if len(pcm) < 4096:
+        raise OpenRouterError(f"model {model} returned no audio ({len(pcm)} bytes)")
+    from pc_common import ffmpeg_bin, run
+    tmp_raw = out_path.with_suffix(".pcm")
+    tmp_raw.write_bytes(pcm)
+    cmd = [ffmpeg_bin(cfg), "-y", "-v", "error",
+           "-f", "s16le", "-ar", "24000", "-ac", "1", "-i", str(tmp_raw)]
+    if speed and abs(speed - 1.0) > 1e-3:
+        cmd += ["-filter:a", f"atempo={max(0.5, min(2.0, float(speed)))}"]
+    cmd += ["-c:a", "libmp3lame", "-q:a", "2", str(out_path)]
+    run(cmd, desc="pcm to mp3")
+    tmp_raw.unlink(missing_ok=True)
+    log_spend("tts", model, cost, text[:120])
+    return out_path
+
+
+def synth_speech(text: str, out_path: Path, *, cfg: dict, model: str | None = None,
+                 voice: str | None = None, speed: float | None = None,
+                 instructions: str | None = None) -> Path:
+    model = model or cfg["tts_model"]
+    voice = voice or cfg.get("tts_voice") or "alloy"
+    out_path = out_path.with_suffix(".mp3")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def synth(m):
+        # dedicated speech models go through /audio/speech, chat-audio
+        # models (gpt-audio and friends) through /chat/completions
+        fn = _synth_speech_endpoint if "tts" in m.lower() else _synth_chat_audio
+        return fn(m, text, out_path, cfg=cfg, voice=voice, speed=speed,
+                  instructions=instructions)
+
+    try:
+        return synth(model)
+    except OpenRouterError as exc:
+        gone = any(t in str(exc) for t in ("does not exist", "HTTP 404", "not a valid model"))
+        if not gone:
+            die(str(exc))
+        fallback = _pick_tts_id([m["id"] for m in list_tts_models(cfg)["models"]])
+        if not fallback or fallback == model:
+            die(str(exc))
+        warn(f"tts model {model} is gone from OpenRouter, switching to {fallback} "
+             f"(persist it: promptcut config --set tts_model={fallback})")
+        try:
+            return synth(fallback)
+        except OpenRouterError as exc2:
+            die(str(exc2))
 
 
 def transcribe(audio_path: Path, *, cfg: dict, model: str | None = None,

@@ -237,6 +237,11 @@ def cmd_keys(args):
 
 def cmd_models(args):
     cfg = load_config()
+    if args.kind == "tts":
+        res = orr.list_tts_models(cfg)
+        res["models"] = res["models"][:args.limit]
+        out_json(res)
+        return
     out_json(orr.list_models(cfg, args.kind)[:args.limit])
 
 
@@ -551,7 +556,7 @@ def build_parser():
     sp = add("keys", cmd_keys, "store stock provider keys")
     sp.add_argument("--set", nargs="*", metavar="PROVIDER=KEY")
     sp = add("models", cmd_models, "list OpenRouter models by output modality")
-    sp.add_argument("--kind", default="image", choices=["image", "audio", "text"])
+    sp.add_argument("--kind", default="image", choices=["image", "audio", "text", "tts"])
     sp.add_argument("--limit", type=int, default=40)
 
     sp = add("tts", cmd_tts, "text to speech")
