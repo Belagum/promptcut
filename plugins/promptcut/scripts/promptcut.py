@@ -122,7 +122,7 @@ def cmd_doctor(args):
 
 
 PIP_DEPS = (("pillow", "PIL"), ("yt-dlp", "yt_dlp"), ("edge-tts", "edge_tts"),
-            ("pycapcut", "pycapcut"))
+            ("pycapcut", "pycapcut"), ("num2words", "num2words"))
 
 
 def _pip_install(pkg: str, upgrade: bool = False) -> tuple:

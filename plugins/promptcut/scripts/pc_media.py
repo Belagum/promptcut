@@ -95,46 +95,20 @@ def placeholder_voice(text: str, out: Path, cfg: dict, speed: float = 1.0) -> Pa
     return out
 
 
-_NUM_U = {0: "ноль", 1: "один", 2: "два", 3: "три", 4: "четыре", 5: "пять",
-          6: "шесть", 7: "семь", 8: "восемь", 9: "девять", 10: "десять",
-          11: "одиннадцать", 12: "двенадцать", 13: "тринадцать", 14: "четырнадцать",
-          15: "пятнадцать", 16: "шестнадцать", 17: "семнадцать",
-          18: "восемнадцать", 19: "девятнадцать"}
-_NUM_T = {2: "двадцать", 3: "тридцать", 4: "сорок", 5: "пятьдесят", 6: "шестьдесят",
-          7: "семьдесят", 8: "восемьдесят", 9: "девяносто"}
-_NUM_H = {1: "сто", 2: "двести", 3: "триста", 4: "четыреста", 5: "пятьсот",
-          6: "шестьсот", 7: "семьсот", 8: "восемьсот", 9: "девятьсот"}
-
-
-def _num_ru(n: int) -> list:
-    """Nominative Russian words for a number, for transcript comparison only."""
-    if n < 20:
-        return [_NUM_U[n]]
-    if n < 100:
-        t, u = divmod(n, 10)
-        return [_NUM_T[t]] + ([_NUM_U[u]] if u else [])
-    if n < 1000:
-        h, r = divmod(n, 100)
-        return [_NUM_H[h]] + (_num_ru(r) if r else [])
-    if n < 1000000:
-        th, r = divmod(n, 1000)
-        words = ["одна"] if th == 1 else _num_ru(th)
-        words = ["две" if w == "два" else w for w in words]
-        last, teens = th % 10, th % 100
-        suf = ("тысяч" if 10 <= teens <= 20 or last in (0, 5, 6, 7, 8, 9)
-               else "тысяча" if last == 1 else "тысячи")
-        return words + [suf] + (_num_ru(r) if r else [])
-    return [str(n)]
-
-
 def _norm_words(text: str) -> list:
-    """Tokens for transcript comparison: lowercase, no yo/stress, digits worded."""
+    """Tokens for transcript comparison: lowercase, no yo/stress; digit tokens
+    (transcripts write «129» for spoken numbers) worded via num2words."""
     import re
     text = (text or "").lower().replace("ё", "е").replace("́", "")
     out = []
     for tok in re.findall(r"[a-zа-яіїєґ]+|[0-9]+", text):
         if tok.isdigit() and len(tok) <= 6:
-            out.extend(_num_ru(int(tok)))
+            try:
+                from num2words import num2words
+                out.extend(re.findall(r"[а-я]+", num2words(int(tok), lang="ru")
+                                      .replace("ё", "е")))
+            except ImportError:
+                out.append(tok)
         else:
             out.append(tok)
     return out
@@ -387,6 +361,7 @@ def ensure_media(plan: dict, wd: Path, *, fake: bool = False, workers: int = 4,
                 marks_file = tts_cache / f"{key}.marks.json"
 
                 def synth_group():
+                    marks_file.unlink(missing_ok=True)
                     if fake or voice["provider"] == "none":
                         placeholder_voice(full, cached, cfg, voice["speed"])
                         marks = []
@@ -429,11 +404,15 @@ def ensure_media(plan: dict, wd: Path, *, fake: bool = False, workers: int = 4,
                     shot["vo_file"] = None
                     shot["vo_duration"] = 0.0
                     return
-                key = sha("tts4", shot["vo"], voice["provider"], voice["model"],
+                key = sha("tts", shot["vo"], voice["provider"], voice["model"],
                           voice["voice"], voice["speed"], "fake" if fake else "real")
                 cached = tts_cache / f"{key}.mp3"
+                ok_tag = tts_cache / f"{key}.ok.json"
 
                 def synth():
+                    # the ok-sidecar is written only after a take passes checks,
+                    # so an interrupted or drifted take can never be reused
+                    ok_tag.unlink(missing_ok=True)
                     if fake or voice["provider"] == "none":
                         placeholder_voice(shot["vo"], cached, cfg, voice["speed"])
                     elif voice["provider"] == "edge":
@@ -444,9 +423,11 @@ def ensure_media(plan: dict, wd: Path, *, fake: bool = False, workers: int = 4,
                                              voice=voice["voice"], model=voice["model"],
                                              speed=voice["speed"],
                                              instructions=voice.get("instructions"))
+                    ok_tag.write_text(json.dumps({"v": 1, "chars": len(shot["vo"])}),
+                                      encoding="utf-8")
                     info(f"voice {shot['id']} done")
 
-                if force or not cached.exists():
+                if force or not cached.exists() or not ok_tag.exists():
                     synth()
                 else:
                     info(f"voice {shot['id']} cached")
