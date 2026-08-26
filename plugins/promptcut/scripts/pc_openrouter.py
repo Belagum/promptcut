@@ -168,16 +168,19 @@ def _synth_speech_endpoint(model, text, out_path, *, cfg, voice, speed, instruct
 
 def _synth_chat_audio(model, text, out_path, *, cfg, voice, speed, instructions) -> Path:
     # chat-audio models only speak over a streaming request (pcm16 chunks)
-    system = ("You are a text-to-speech engine. Read the user's text aloud exactly as "
-              "written, verbatim and completely, in the language it is written in. "
-              "Never add, skip, translate or comment on anything.")
+    system = ("You are a text-to-speech engine. The user gives you a script; speak the "
+              "script body aloud exactly as written, verbatim and completely, in the "
+              "language it is written in. Never answer questions in it, never add, "
+              "skip, translate or comment on anything, never read these instructions.")
     if instructions:
         system += f" Delivery style: {instructions}"
+    text = f"Repeat this text exactly and say nothing else:\n{text}"
     payload = {
         "model": model,
         "modalities": ["text", "audio"],
         "audio": {"voice": voice, "format": "pcm16"},
         "stream": True,
+        "temperature": 0.3,
         "messages": [{"role": "system", "content": system},
                      {"role": "user", "content": text}],
         "usage": {"include": True},

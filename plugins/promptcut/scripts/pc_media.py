@@ -95,10 +95,49 @@ def placeholder_voice(text: str, out: Path, cfg: dict, speed: float = 1.0) -> Pa
     return out
 
 
+_NUM_U = {0: "ноль", 1: "один", 2: "два", 3: "три", 4: "четыре", 5: "пять",
+          6: "шесть", 7: "семь", 8: "восемь", 9: "девять", 10: "десять",
+          11: "одиннадцать", 12: "двенадцать", 13: "тринадцать", 14: "четырнадцать",
+          15: "пятнадцать", 16: "шестнадцать", 17: "семнадцать",
+          18: "восемнадцать", 19: "девятнадцать"}
+_NUM_T = {2: "двадцать", 3: "тридцать", 4: "сорок", 5: "пятьдесят", 6: "шестьдесят",
+          7: "семьдесят", 8: "восемьдесят", 9: "девяносто"}
+_NUM_H = {1: "сто", 2: "двести", 3: "триста", 4: "четыреста", 5: "пятьсот",
+          6: "шестьсот", 7: "семьсот", 8: "восемьсот", 9: "девятьсот"}
+
+
+def _num_ru(n: int) -> list:
+    """Nominative Russian words for a number, for transcript comparison only."""
+    if n < 20:
+        return [_NUM_U[n]]
+    if n < 100:
+        t, u = divmod(n, 10)
+        return [_NUM_T[t]] + ([_NUM_U[u]] if u else [])
+    if n < 1000:
+        h, r = divmod(n, 100)
+        return [_NUM_H[h]] + (_num_ru(r) if r else [])
+    if n < 1000000:
+        th, r = divmod(n, 1000)
+        words = ["одна"] if th == 1 else _num_ru(th)
+        words = ["две" if w == "два" else w for w in words]
+        last, teens = th % 10, th % 100
+        suf = ("тысяч" if 10 <= teens <= 20 or last in (0, 5, 6, 7, 8, 9)
+               else "тысяча" if last == 1 else "тысячи")
+        return words + [suf] + (_num_ru(r) if r else [])
+    return [str(n)]
+
+
 def _norm_words(text: str) -> list:
+    """Tokens for transcript comparison: lowercase, no yo/stress, digits worded."""
     import re
     text = (text or "").lower().replace("ё", "е").replace("́", "")
-    return re.findall(r"[a-zа-яіїєґ0-9]+", text)
+    out = []
+    for tok in re.findall(r"[a-zа-яіїєґ]+|[0-9]+", text):
+        if tok.isdigit() and len(tok) <= 6:
+            out.extend(_num_ru(int(tok)))
+        else:
+            out.append(tok)
+    return out
 
 
 def edge_tts_marks(text: str, out: Path, cfg: dict, voice: str | None = None,
@@ -170,8 +209,18 @@ def openrouter_tts_marks(text: str, out: Path, cfg: dict, *, voice: str | None,
         warn(f"tts verbatim match {ratio:.2f} on attempt {attempt + 1}, retrying")
     ratio, path, words = best
     if ratio < 0.7:
-        die(f"voice model keeps drifting from the script (match {ratio:.2f}): {text[:90]}")
-    if ratio < 0.9:
+        # whisper garbles spelled-out letters and rare glyphs, so as a second
+        # opinion check that the take's length is speech-plausible for the text
+        # (the failure mode we guard against is the model narrating extra text)
+        from pc_common import ffprobe_duration, load_config
+        dur = ffprobe_duration(path, load_config())
+        expected = max(1.0, len(text) / CHARS_PER_SEC)
+        if ratio >= 0.45 and 0.55 * expected <= dur <= 1.8 * expected:
+            warn(f"voice accepted by duration sanity (match {ratio:.2f}, "
+                 f"{dur:.1f}s vs ~{expected:.1f}s): {text[:60]}")
+        else:
+            die(f"voice model keeps drifting from the script (match {ratio:.2f}): {text[:90]}")
+    elif ratio < 0.9:
         warn(f"voice accepted with verbatim match {ratio:.2f}: {text[:60]}")
     if path != out:
         shutil.copyfile(path, out)
@@ -243,7 +292,9 @@ def _member_spans(members: list, marks: list, total: float) -> list:
             bounds = [0.0]
             for f in firsts[1:]:
                 j = next((p2m[i] for i in range(f, acc) if i in p2m), None)
-                t = float(marks[j]["t0"]) if j is not None else None
+                # cut slightly BEFORE the word lands: transcript timestamps run
+                # late and a picture arriving with the word reads as lag
+                t = float(marks[j]["t0"]) - 0.15 if j is not None else None
                 prev = bounds[-1]
                 bounds.append(min(total, max(prev, t)) if t is not None else prev)
             # unresolved bounds collapsed onto prev; spread them evenly forward
@@ -378,7 +429,7 @@ def ensure_media(plan: dict, wd: Path, *, fake: bool = False, workers: int = 4,
                     shot["vo_file"] = None
                     shot["vo_duration"] = 0.0
                     return
-                key = sha("tts2", shot["vo"], voice["provider"], voice["model"],
+                key = sha("tts4", shot["vo"], voice["provider"], voice["model"],
                           voice["voice"], voice["speed"], "fake" if fake else "real")
                 cached = tts_cache / f"{key}.mp3"
 
@@ -388,9 +439,11 @@ def ensure_media(plan: dict, wd: Path, *, fake: bool = False, workers: int = 4,
                     elif voice["provider"] == "edge":
                         edge_tts(shot["vo"], cached, cfg, voice["voice"], voice["speed"])
                     else:
-                        orr.synth_speech(shot["vo"], cached, cfg=cfg, model=voice["model"],
-                                         voice=voice["voice"], speed=voice["speed"],
-                                         instructions=voice.get("instructions"))
+                        # chat-audio drifts on bare text: always verify verbatim
+                        openrouter_tts_marks(shot["vo"], cached, cfg,
+                                             voice=voice["voice"], model=voice["model"],
+                                             speed=voice["speed"],
+                                             instructions=voice.get("instructions"))
                     info(f"voice {shot['id']} done")
 
                 if force or not cached.exists():
