@@ -16,30 +16,41 @@ ducking», «озвучь абзац» — каждое это одна кома
 
 ## Установка
 
-From a local clone:
+1. Добавь плагин в Claude Code — из локальной папки:
 
-```
-/plugin marketplace add C:\path\to\promptcut
-/plugin install promptcut@promptcut
-```
+   ```
+   /plugin marketplace add C:\путь\до\promptcut
+   /plugin install promptcut@promptcut
+   ```
 
-From GitHub, once you have pushed it:
+   или сразу с GitHub:
 
-```
-/plugin marketplace add <your-github-user>/promptcut
-/plugin install promptcut@promptcut
-```
+   ```
+   /plugin marketplace add <твой-github>/promptcut
+   /plugin install promptcut@promptcut
+   ```
 
-Потом в Клоде: `/promptcut:setup` — он проверит чего не хватает и скажет что
-сделать. Коротко:
+2. Запусти `/promptcut:setup`. Он сам поставит всё, что может — pillow, yt-dlp,
+   edge-tts, pycapcut через pip и ffmpeg через winget/brew — и скажет, что
+   осталось на тебе (ключи).
 
-```
-winget install Gyan.FFmpeg          # Windows
-setx OPENROUTER_API_KEY sk-or-...   # для генерации картинок и озвучки
-pip install pycapcut edge-tts pillow yt-dlp   # опционально: CapCut, голоса, выноски, веб-медиа
-```
+3. Дай ему ключ OpenRouter (нужен для генерации картинок, озвучки и `ask`;
+   всё остальное работает и без него). Ключ — на openrouter.ai/settings/keys,
+   закинь пару долларов, потом либо:
+
+   ```
+   python plugins/promptcut/scripts/promptcut.py config --set openrouter_api_key=sk-or-...
+   ```
+
+   (работает сразу), либо `setx OPENROUTER_API_KEY sk-or-...` и новый терминал.
 
 Обязательны только Python 3.10+ и ffmpeg. Всё остальное добавляет возможности.
+Если хочется руками:
+
+```
+pip install pycapcut edge-tts pillow yt-dlp
+winget install Gyan.FFmpeg          # Windows; brew install ffmpeg на macOS
+```
 
 ## Что умеет
 

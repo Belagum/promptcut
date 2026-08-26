@@ -21,7 +21,9 @@ Reply to the person in their own language.
 
 Run `doctor`. It reports ffmpeg, the OpenRouter key, pycapcut, the CapCut drafts
 folder and stock keys, plus a `problems` list. Fix only what the job needs:
-a talking-head cut needs ffmpeg alone, image generation needs the key.
+a talking-head cut needs ffmpeg alone, image generation needs the key. If the
+problems are missing packages or ffmpeg, run `setup` - it installs them itself;
+only keys need the person.
 
 ## Two modes of work
 
@@ -114,6 +116,7 @@ Setup and info
 | command | what it does |
 |---|---|
 | `doctor` | environment, keys, CapCut folder, problems |
+| `setup [--upgrade]` | auto-install missing pip deps and ffmpeg; `--upgrade` refreshes yt-dlp etc |
 | `config --set key=value` | image_model, tts_model, tts_voice, edge_voice, capcut_drafts_dir, ffmpeg |
 | `keys --set pexels=... freesound=...` | stock provider keys |
 | `models --kind image\|audio\|text` | live OpenRouter model list with prices |

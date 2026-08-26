@@ -107,18 +107,104 @@ def cmd_doctor(args):
         checks["edge_tts"] = False
     problems = []
     if not checks["ffmpeg"]:
-        problems.append("ffmpeg missing: winget install Gyan.FFmpeg (Windows)")
+        problems.append("ffmpeg missing: run 'promptcut setup', or winget install Gyan.FFmpeg")
     if not checks["openrouter_key"]:
-        problems.append("no OpenRouter key: setx OPENROUTER_API_KEY sk-or-... "
+        problems.append("no OpenRouter key: promptcut config --set openrouter_api_key=sk-or-... "
                         "(image and voice generation off; --fake and editing still work)")
     if not checks["pycapcut"]:
-        problems.append("pycapcut missing, no CapCut export: pip install pycapcut")
+        problems.append("pycapcut missing, no CapCut export: run 'promptcut setup'")
     if not checks["pillow"]:
-        problems.append("pillow missing, no annotate/card: pip install pillow")
+        problems.append("pillow missing, no annotate/card: run 'promptcut setup'")
     if not checks["yt_dlp"]:
-        problems.append("yt-dlp missing, no media-dl: pip install yt-dlp")
+        problems.append("yt-dlp missing, no media-dl: run 'promptcut setup'")
     checks["problems"] = problems
     out_json(checks)
+
+
+PIP_DEPS = (("pillow", "PIL"), ("yt-dlp", "yt_dlp"), ("edge-tts", "edge_tts"),
+            ("pycapcut", "pycapcut"))
+
+
+def _pip_install(pkg: str, upgrade: bool = False) -> tuple:
+    import subprocess
+    cmd = [sys.executable, "-m", "pip", "install", "--quiet"]
+    if upgrade:
+        cmd.append("--upgrade")
+    try:
+        proc = subprocess.run(cmd + [pkg], stdout=subprocess.PIPE,
+                              stderr=subprocess.STDOUT, timeout=600)
+        err = (proc.stdout or b"").decode("utf-8", "replace")
+        if proc.returncode != 0 and ("Permission" in err or "Access is denied" in err):
+            proc = subprocess.run(cmd + ["--user", pkg], stdout=subprocess.PIPE,
+                                  stderr=subprocess.STDOUT, timeout=600)
+            err = (proc.stdout or b"").decode("utf-8", "replace")
+    except subprocess.TimeoutExpired:
+        return False, "pip timed out"
+    if proc.returncode == 0:
+        return True, ""
+    tail = err.strip().splitlines()[-1][:200] if err.strip() else "pip failed"
+    return False, tail
+
+
+def _install_ffmpeg() -> str:
+    import shutil
+    import subprocess
+    if sys.platform == "win32" and shutil.which("winget"):
+        info("installing ffmpeg via winget, this can take a few minutes...")
+        try:
+            proc = subprocess.run(["winget", "install", "-e", "--id", "Gyan.FFmpeg",
+                                   "--silent", "--accept-source-agreements",
+                                   "--accept-package-agreements"],
+                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                  timeout=1200)
+        except subprocess.TimeoutExpired:
+            return "winget timed out - install manually: winget install Gyan.FFmpeg"
+        if proc.returncode == 0:
+            return "installed" if have("ffmpeg") else \
+                "installed - open a new terminal so PATH picks it up"
+        return (f"winget failed (exit {proc.returncode}) - "
+                "install manually: winget install Gyan.FFmpeg")
+    if sys.platform == "darwin" and shutil.which("brew"):
+        info("installing ffmpeg via brew, this can take a few minutes...")
+        try:
+            proc = subprocess.run(["brew", "install", "ffmpeg"], stdout=subprocess.PIPE,
+                                  stderr=subprocess.STDOUT, timeout=1800)
+        except subprocess.TimeoutExpired:
+            return "brew timed out - install manually: brew install ffmpeg"
+        return "installed" if proc.returncode == 0 else \
+            "brew failed - install manually: brew install ffmpeg"
+    return ("missing - install manually: winget install Gyan.FFmpeg (Windows), "
+            "brew install ffmpeg (macOS), sudo apt install ffmpeg (Linux)")
+
+
+def cmd_setup(args):
+    import importlib
+    import shutil
+    cfg = load_config()
+    result = {"installed": [], "already": [], "failed": {}}
+    for pkg, mod in PIP_DEPS:
+        present = bool(shutil.which(pkg)) if pkg == "yt-dlp" else False
+        if not present:
+            try:
+                importlib.import_module(mod)
+                present = True
+            except ImportError:
+                present = False
+        if present and not args.upgrade:
+            result["already"].append(pkg)
+            continue
+        info(f"pip install {pkg}...")
+        ok, err = _pip_install(pkg, args.upgrade and present)
+        if ok:
+            result["installed"].append(pkg)
+        else:
+            result["failed"][pkg] = err
+    result["ffmpeg"] = "present" if have(cfg.get("ffmpeg", "ffmpeg")) else _install_ffmpeg()
+    result["openrouter_key"] = bool(api_key(cfg))
+    if not result["openrouter_key"]:
+        result["hint"] = ("no OpenRouter key: promptcut config --set openrouter_api_key=sk-or-... "
+                          "(get one at openrouter.ai/settings/keys)")
+    out_json(result)
 
 
 def cmd_config(args):
@@ -457,6 +543,9 @@ def build_parser():
         return sp
 
     add("doctor", cmd_doctor, "check environment, keys, CapCut folder")
+    sp = add("setup", cmd_setup, "install missing optional deps: pip packages and ffmpeg")
+    sp.add_argument("--upgrade", action="store_true",
+                    help="also upgrade already-installed packages (yt-dlp ages fast)")
     sp = add("config", cmd_config, "show or change config")
     sp.add_argument("--set", nargs="*", metavar="KEY=VALUE")
     sp = add("keys", cmd_keys, "store stock provider keys")

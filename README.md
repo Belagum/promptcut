@@ -17,31 +17,42 @@ and Claude picks it.
 
 ## Install
 
-From a local clone:
+1. Add the plugin in Claude Code — from a local clone:
 
-```
-/plugin marketplace add C:\path\to\promptcut
-/plugin install promptcut@promptcut
-```
+   ```
+   /plugin marketplace add C:\path\to\promptcut
+   /plugin install promptcut@promptcut
+   ```
 
-From GitHub, once you have pushed it:
+   or straight from GitHub:
 
-```
-/plugin marketplace add <your-github-user>/promptcut
-/plugin install promptcut@promptcut
-```
+   ```
+   /plugin marketplace add <your-github-user>/promptcut
+   /plugin install promptcut@promptcut
+   ```
 
-Then, in Claude, run `/promptcut:setup`. It checks what's missing and tells you
-how to fix it. The short version:
+2. Run `/promptcut:setup`. It installs what it can on its own — pillow, yt-dlp,
+   edge-tts, pycapcut via pip, and ffmpeg via winget/brew — then tells you what
+   only you can do (keys).
 
-```
-winget install Gyan.FFmpeg          # Windows; brew install ffmpeg on macOS
-setx OPENROUTER_API_KEY sk-or-...   # for generated images and TTS
-pip install pycapcut edge-tts pillow yt-dlp   # optional: CapCut, free voices, callouts, web media
-```
+3. Give it an OpenRouter key (needed for generated images, TTS and `ask`;
+   everything else works without it). Get one at openrouter.ai/settings/keys,
+   top up a few dollars, then either:
+
+   ```
+   python plugins/promptcut/scripts/promptcut.py config --set openrouter_api_key=sk-or-...
+   ```
+
+   (works immediately), or `setx OPENROUTER_API_KEY sk-or-...` and open a new
+   terminal.
 
 Python 3.10+ and ffmpeg are the only hard requirements. Everything else buys you
-extra capabilities.
+extra capabilities. If you'd rather install by hand:
+
+```
+pip install pycapcut edge-tts pillow yt-dlp
+winget install Gyan.FFmpeg          # Windows; brew install ffmpeg on macOS
+```
 
 ## What it does
 
