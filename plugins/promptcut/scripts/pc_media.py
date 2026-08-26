@@ -1,0 +1,222 @@
+# -*- coding: utf-8 -*-
+"""Media generation for a storyboard: speech and images, cached, with a stub mode."""
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
+import pc_openrouter as orr
+from pc_common import (cache_dir, die, ffmpeg_bin, ffprobe_duration, info, run, sha, warn)
+
+CHARS_PER_SEC = 14.5  # rough ru/en speaking rate, only used to fake stub durations
+
+
+def font_file() -> str | None:
+    env = os.environ.get("PROMPTCUT_FONT")
+    if env and Path(env).exists():
+        return env
+    cands = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        "/Library/Fonts/Arial Unicode.ttf",
+        "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+        "C:/Windows/Fonts/arial.ttf",
+        "C:/Windows/Fonts/segoeui.ttf",
+    ]
+    for c in cands:
+        if Path(c).exists():
+            return c
+    try:
+        out = subprocess.run(["fc-match", "-f", "%{file}", "sans"], stdout=subprocess.PIPE,
+                             timeout=10).stdout.decode().strip()
+        if out and Path(out).exists():
+            return out
+    except Exception:
+        pass
+    return None
+
+
+def _wrap(text: str, width: int = 34, max_lines: int = 6) -> str:
+    words, lines, cur = text.split(), [], ""
+    for w in words:
+        if len(cur) + len(w) + 1 > width:
+            lines.append(cur)
+            cur = w
+        else:
+            cur = f"{cur} {w}".strip()
+    if cur:
+        lines.append(cur)
+    return "\n".join(lines[:max_lines])
+
+
+def placeholder_image(text: str, out: Path, w: int, h: int, cfg: dict, label: str = "") -> Path:
+    seed = int(sha(text or label)[:6], 16)
+    c1 = f"0x{(seed & 0x3F3F3F) | 0x101820:06x}"
+    c2 = f"0x{((seed >> 6) & 0x7F7F7F) | 0x203040:06x}"
+    out = out.with_suffix(".png")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    body = _wrap(text or label or "shot", max(20, int(w / 42)))
+    tmp = Path(tempfile.mkdtemp()) / "t.txt"
+    tmp.write_text(body, encoding="utf-8")
+    ff = font_file()
+    draw = (f"drawtext=textfile='{tmp.as_posix()}':fontcolor=white@0.92:"
+            f"fontsize={max(20, int(h / 18))}:x=(w-text_w)/2:y=(h-text_h)/2:"
+            f"line_spacing={int(h/60)}:box=0")
+    draw += f":fontfile='{Path(ff).as_posix()}'" if ff else ":font=Arial"
+    tag = (f"drawtext=text='{label}':fontcolor=white@0.55:fontsize={max(16,int(h/28))}"
+           f":x={int(w*0.03)}:y={int(h*0.03)}")
+    tag += f":fontfile='{Path(ff).as_posix()}'" if ff else ":font=Arial"
+    vf = (f"gradients=s={w}x{h}:c0={c1}:c1={c2}:type=radial:n=1,"
+          f"format=rgb24,{draw},{tag}")
+    run([ffmpeg_bin(cfg), "-y", "-v", "error", "-f", "lavfi", "-i",
+         f"gradients=s={w}x{h}:c0={c1}:c1={c2}:type=radial", "-frames:v", "1",
+         "-vf", f"format=rgb24,{draw},{tag}", str(out)],
+        desc="stub image")
+    shutil.rmtree(tmp.parent, ignore_errors=True)
+    return out
+
+
+def placeholder_voice(text: str, out: Path, cfg: dict, speed: float = 1.0) -> Path:
+    dur = max(1.0, min(40.0, len(text) / (CHARS_PER_SEC * max(0.5, speed)) + 0.35))
+    out = out.with_suffix(".mp3")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    run([ffmpeg_bin(cfg), "-y", "-v", "error", "-f", "lavfi",
+         "-i", f"sine=frequency=210:duration={dur:.3f}:sample_rate=44100",
+         "-af", "volume=0.06,tremolo=f=5.5:d=0.7", "-ac", "2", "-b:a", "128k", str(out)],
+        desc="stub voice")
+    return out
+
+
+def edge_tts(text: str, out: Path, cfg: dict, voice: str | None = None,
+             speed: float = 1.0) -> Path:
+    voice = voice or cfg.get("edge_voice") or "ru-RU-DmitryNeural"
+    out = out.with_suffix(".mp3")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    tmp = Path(tempfile.mkdtemp()) / "in.txt"
+    tmp.write_text(text, encoding="utf-8")
+    rate = int(round((speed - 1.0) * 100))
+    cmd = [sys.executable, "-m", "edge_tts", "--voice", voice, "--file", str(tmp),
+           "--write-media", str(out)]
+    if rate:
+        cmd += [f"--rate={rate:+d}%"]
+    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    shutil.rmtree(tmp.parent, ignore_errors=True)
+    if proc.returncode != 0 or not out.exists() or out.stat().st_size < 512:
+        msg = (proc.stdout or b"").decode("utf-8", "replace")[-400:]
+        if "No module named" in msg:
+            die("edge-tts is not installed: pip install edge-tts")
+        die(f"edge-tts failed:\n{msg}")
+    return out
+
+
+def _voice_conf(plan: dict, cfg: dict) -> dict:
+    v = dict(plan.get("voice") or {})
+    v["provider"] = (v.get("provider") or cfg.get("tts_provider") or "openrouter").lower()
+    v["model"] = v.get("model") or cfg.get("tts_model")
+    v["voice"] = v.get("voice") or (cfg.get("edge_voice") if v["provider"] == "edge"
+                                    else cfg.get("tts_voice"))
+    v["speed"] = float(v.get("speed") or 1.0)
+    return v
+
+
+def _image_prompt(plan: dict, shot: dict) -> str:
+    style = (plan.get("image") or {}).get("style") or ""
+    prompt = shot["image_prompt"]
+    return f"{prompt}. {style}".strip().strip(".") if style else prompt
+
+
+def ensure_media(plan: dict, wd: Path, *, fake: bool = False, workers: int = 4,
+                 cfg: dict | None = None, force: bool = False) -> dict:
+    from pc_common import load_config
+    cfg = cfg or load_config()
+    voice = _voice_conf(plan, cfg)
+    img_conf = plan.get("image") or {}
+    img_model = img_conf.get("model") or cfg.get("image_model")
+    img_res = img_conf.get("resolution") or cfg.get("image_resolution") or "2K"
+    aspect = plan["aspect"]
+    tts_cache = cache_dir() / "tts"
+    img_cache = cache_dir() / "img"
+    (wd / "audio").mkdir(parents=True, exist_ok=True)
+    (wd / "img").mkdir(parents=True, exist_ok=True)
+    jobs = []
+
+    for shot in plan["shots"]:
+        jobs.append(("vo", shot))
+        jobs.append(("img", shot))
+
+    def do(job):
+        kind, shot = job
+        try:
+            if kind == "vo":
+                if not shot["vo"]:
+                    shot["vo_file"] = None
+                    shot["vo_duration"] = 0.0
+                    return
+                key = sha("tts2", shot["vo"], voice["provider"], voice["model"],
+                          voice["voice"], voice["speed"], "fake" if fake else "real")
+                cached = tts_cache / f"{key}.mp3"
+                if force or not cached.exists():
+                    if fake or voice["provider"] == "none":
+                        placeholder_voice(shot["vo"], cached, cfg, voice["speed"])
+                    elif voice["provider"] == "edge":
+                        edge_tts(shot["vo"], cached, cfg, voice["voice"], voice["speed"])
+                    else:
+                        orr.synth_speech(shot["vo"], cached, cfg=cfg, model=voice["model"],
+                                         voice=voice["voice"], speed=voice["speed"],
+                                         instructions=voice.get("instructions"))
+                    info(f"voice {shot['id']} done")
+                else:
+                    info(f"voice {shot['id']} cached")
+                dst = wd / "audio" / f"{shot['id']}.mp3"
+                shutil.copyfile(cached, dst)
+                shot["vo_file"] = str(dst)
+                shot["vo_duration"] = round(ffprobe_duration(dst, cfg), 3)
+            else:
+                if shot.get("image"):
+                    src = Path(str(shot["image"])).expanduser()
+                    dst = wd / "img" / f"{shot['id']}{src.suffix.lower() or '.png'}"
+                    shutil.copyfile(src, dst)
+                    shot["image_file"] = str(dst)
+                    return
+                if not shot["image_prompt"]:
+                    shot["image_file"] = None
+                    return
+                prompt = _image_prompt(plan, shot)
+                key = sha("img2", prompt, img_model, img_res, aspect, shot.get("seed"),
+                          "fake" if fake else "real")
+                hit = next(iter(sorted(img_cache.glob(f"{key}.*"))), None)
+                if force or not hit:
+                    if fake:
+                        hit = placeholder_image(prompt, img_cache / key, plan["width"],
+                                                plan["height"], cfg, label=shot["id"])
+                    else:
+                        hit = orr.generate_image(prompt, img_cache / key, cfg=cfg,
+                                                 model=img_model, aspect_ratio=aspect,
+                                                 resolution=img_res, seed=shot.get("seed"))
+                    info(f"image {shot['id']} done")
+                else:
+                    info(f"image {shot['id']} cached")
+                dst = wd / "img" / f"{shot['id']}{hit.suffix}"
+                shutil.copyfile(hit, dst)
+                shot["image_file"] = str(dst)
+        except SystemExit:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            die(f"shot {shot['id']} ({kind}): {exc}")
+
+    if workers > 1 and not fake:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            list(pool.map(do, jobs))
+    else:
+        for job in jobs:
+            do(job)
+
+    for shot in plan["shots"]:
+        if not shot.get("image_file"):
+            warn(f"shot {shot['id']} has no image, falling back to black")
+    return plan

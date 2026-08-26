@@ -1,0 +1,20 @@
+{
+  "project": "explainer",
+  "aspect": "16:9",
+  "fps": 30,
+  "voice": {"provider": "openrouter", "voice": "alloy", "speed": 1.0,
+            "instructions": "calm documentary narrator"},
+  "image": {"resolution": "2K",
+            "style": "editorial illustration, flat shapes, limited palette, clean background"},
+  "music": {"file": null, "gain_db": -24, "duck": true},
+  "subtitles": {"enabled": true, "max_chars": 42, "position": "bottom"},
+  "timing": {"transition": "fade", "transition_duration": 0.5, "min_shot": 2.5},
+  "shots": [
+    {"vo": "The first paragraph lays out the problem in full, without rushing.",
+     "image_prompt": "illustration of a tangled network of wires", "motion": "pan_left"},
+    {"vo": "The second shows how the thing works on the inside.",
+     "image_prompt": "cutaway diagram of a simple machine, editorial style", "motion": "zoom_in"},
+    {"vo": "The third one sums it up.",
+     "image_prompt": "single clean lightbulb on a plain background", "motion": "still"}
+  ]
+}

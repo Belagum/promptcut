@@ -1,0 +1,23 @@
+{
+  "project": "short-demo",
+  "aspect": "9:16",
+  "fps": 30,
+  "voice": {"provider": "openrouter", "voice": "alloy", "speed": 1.05,
+            "instructions": "energetic, clear, short pauses"},
+  "image": {"resolution": "2K",
+            "style": "cinematic photo, 35mm, dramatic side light, muted teal and amber"},
+  "music": {"file": null, "gain_db": -23, "duck": true, "fade": 2.0},
+  "subtitles": {"enabled": true, "max_chars": 26, "uppercase": true, "outline": 4},
+  "timing": {"transition": "dissolve", "transition_duration": 0.35, "motion_amp": 0.14},
+  "shots": [
+    {"vo": "The hook goes in the first line or nobody stays.",
+     "image_prompt": "extreme close up of an eye reflecting city lights", "motion": "zoom_in"},
+    {"vo": "The second shot says what this is actually about.",
+     "image_prompt": "empty night street with wet asphalt and neon signs", "motion": "pan_right"},
+    {"vo": "The third one gives a number or a hard detail.",
+     "image_prompt": "hands stacking coins on a wooden table, warm light", "motion": "zoom_out"},
+    {"vo": "The last one asks for the follow.",
+     "image_prompt": "sunrise over rooftops, wide cinematic shot", "motion": "still",
+     "overlay": "SUBSCRIBE"}
+  ]
+}

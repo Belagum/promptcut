@@ -1,0 +1,27 @@
+{
+  "name": "promptcut",
+  "displayName": "PromptCut",
+  "version": "0.1.0",
+  "description": "Turn a prompt into a finished video: storyboard, TTS voiceover, generated or stock images, Ken Burns motion, ducked music, subtitles, ffmpeg render. Plus ~30 granular editing commands and full CapCut draft export.",
+  "author": { "name": "PromptCut contributors" },
+  "homepage": "https://github.com/promptcut/promptcut",
+  "license": "MIT",
+  "keywords": ["video", "video-editing", "montage", "tts", "openrouter", "ffmpeg",
+               "capcut", "shorts", "subtitles", "faceless-video"],
+  "userConfig": {
+    "openrouter_api_key": {
+      "type": "string",
+      "title": "OpenRouter API key",
+      "description": "Key from openrouter.ai/keys, used for image generation and TTS. The OPENROUTER_API_KEY environment variable works instead.",
+      "required": false,
+      "sensitive": true
+    },
+    "capcut_drafts_dir": {
+      "type": "string",
+      "title": "CapCut drafts folder",
+      "description": "Copy it from CapCut > Settings > Draft location. Only needed for CapCut export.",
+      "required": false,
+      "sensitive": false
+    }
+  }
+}
