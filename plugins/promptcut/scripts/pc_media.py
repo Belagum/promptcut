@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -105,14 +106,23 @@ def edge_tts(text: str, out: Path, cfg: dict, voice: str | None = None,
            "--write-media", str(out)]
     if rate:
         cmd += [f"--rate={rate:+d}%"]
-    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    shutil.rmtree(tmp.parent, ignore_errors=True)
-    if proc.returncode != 0 or not out.exists() or out.stat().st_size < 512:
+    msg = ""
+    # the endpoint throttles concurrent requests (NoAudioReceived), retry with backoff
+    for attempt, pause in enumerate((0, 2, 5, 12)):
+        if pause:
+            time.sleep(pause)
+        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        if proc.returncode == 0 and out.exists() and out.stat().st_size >= 512:
+            shutil.rmtree(tmp.parent, ignore_errors=True)
+            return out
         msg = (proc.stdout or b"").decode("utf-8", "replace")[-400:]
         if "No module named" in msg:
-            die("edge-tts is not installed: pip install edge-tts")
-        die(f"edge-tts failed:\n{msg}")
-    return out
+            break
+        warn(f"edge-tts attempt {attempt + 1} failed, retrying")
+    shutil.rmtree(tmp.parent, ignore_errors=True)
+    if "No module named" in msg:
+        die("edge-tts is not installed: pip install edge-tts")
+    die(f"edge-tts failed:\n{msg}")
 
 
 def _voice_conf(plan: dict, cfg: dict) -> dict:
@@ -161,7 +171,8 @@ def ensure_media(plan: dict, wd: Path, *, fake: bool = False, workers: int = 4,
                 key = sha("tts2", shot["vo"], voice["provider"], voice["model"],
                           voice["voice"], voice["speed"], "fake" if fake else "real")
                 cached = tts_cache / f"{key}.mp3"
-                if force or not cached.exists():
+
+                def synth():
                     if fake or voice["provider"] == "none":
                         placeholder_voice(shot["vo"], cached, cfg, voice["speed"])
                     elif voice["provider"] == "edge":
@@ -171,12 +182,24 @@ def ensure_media(plan: dict, wd: Path, *, fake: bool = False, workers: int = 4,
                                          voice=voice["voice"], speed=voice["speed"],
                                          instructions=voice.get("instructions"))
                     info(f"voice {shot['id']} done")
+
+                if force or not cached.exists():
+                    synth()
                 else:
                     info(f"voice {shot['id']} cached")
                 dst = wd / "audio" / f"{shot['id']}.mp3"
                 shutil.copyfile(cached, dst)
+                try:
+                    dur = ffprobe_duration(dst, cfg)
+                except SystemExit:
+                    # a partial file from an interrupted run poisoned the cache
+                    warn(f"voice {shot['id']}: cached file is corrupt, regenerating")
+                    cached.unlink(missing_ok=True)
+                    synth()
+                    shutil.copyfile(cached, dst)
+                    dur = ffprobe_duration(dst, cfg)
                 shot["vo_file"] = str(dst)
-                shot["vo_duration"] = round(ffprobe_duration(dst, cfg), 3)
+                shot["vo_duration"] = round(dur, 3)
             else:
                 source = shot.get("video") or (
                     shot.get("image")

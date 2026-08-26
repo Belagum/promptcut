@@ -70,7 +70,11 @@ def normalize(raw: dict) -> dict:
     plan["aspect"] = aspect
     plan["fps"] = int(plan.get("fps") or 30)
     if plan["subtitles"].get("size") in (None, 0):
-        plan["subtitles"]["size"] = max(28, int(plan["height"] * 0.045))
+        # cap by width too: ASS WrapStyle 2 never wraps, so a max_chars line
+        # must fit inside the frame even on tall 9:16 canvases
+        max_chars = int(plan["subtitles"].get("max_chars") or 38)
+        by_width = plan["width"] * 0.88 / (max_chars * 0.56)
+        plan["subtitles"]["size"] = max(28, int(min(plan["height"] * 0.045, by_width)))
     if plan["subtitles"].get("margin") in (None, 0):
         plan["subtitles"]["margin"] = int(plan["height"] * (0.14 if plan["height"] > plan["width"] else 0.07))
 

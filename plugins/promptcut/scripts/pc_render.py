@@ -2,13 +2,52 @@
 """ffmpeg assembly: still-image motion, transitions, audio buses, subtitles."""
 from __future__ import annotations
 
+import os
 import shutil
+import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pc_subs
 from pc_common import ffmpeg_bin, ffprobe_duration, info, load_config, run, sha, warn
 
-XFADE_ALIASES = {"cut": "fade", "dissolve": "dissolve", "fade": "fade"}
+XFADE_ALIASES = {"dissolve": "dissolve", "fade": "fade"}
+
+_NVENC: bool | None = None
+
+
+def _has_nvenc(cfg: dict) -> bool:
+    """One tiny probe encode; consumer GPUs cap concurrent sessions, so NVENC
+    is reserved for the single long final pass."""
+    global _NVENC
+    if _NVENC is None:
+        try:
+            r = subprocess.run(
+                [ffmpeg_bin(cfg), "-v", "error", "-f", "lavfi", "-i",
+                 "color=black:s=256x256:d=0.2", "-c:v", "h264_nvenc", "-f", "null", "-"],
+                capture_output=True, timeout=30)
+            _NVENC = r.returncode == 0
+        except Exception:
+            _NVENC = False
+        if _NVENC:
+            info("hardware encoder: h264_nvenc")
+    return _NVENC
+
+
+def _final_codec(cfg: dict, crf: int, preset: str) -> list:
+    enc = (cfg.get("video_encoder") or "auto").lower()
+    if enc != "cpu" and (enc == "nvenc" or _has_nvenc(cfg)):
+        return ["-c:v", "h264_nvenc", "-preset", "p5", "-rc", "vbr",
+                "-cq", str(crf), "-b:v", "0"]
+    return ["-c:v", "libx264", "-preset", preset, "-crf", str(crf)]
+
+
+def _jobs(cfg: dict) -> int:
+    try:
+        j = int(cfg.get("render_jobs") or 0)
+    except (TypeError, ValueError):
+        j = 0
+    return j if j > 0 else min(8, max(2, (os.cpu_count() or 4) - 1))
 
 
 def _ffpath(p) -> str:
@@ -199,17 +238,76 @@ def _audio_graph(plan: dict, inputs: list, total: float) -> tuple:
     return parts, "aout"
 
 
+def _seg_encode(cfg: dict, fps: int) -> list:
+    return ["-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+            "-pix_fmt", "yuv420p", "-r", str(fps), "-movflags", "+faststart"]
+
+
+def _build_segments(plan: dict, wd: Path, cfg: dict) -> list:
+    """Cut clip bodies and render tiny per-boundary transition pieces.
+
+    A chain of 80+ xfades in one filter graph deadlocks ffmpeg silently
+    (video stream ends early, audio keeps going), so the timeline becomes a
+    flat list of short segments joined by the concat demuxer instead."""
+    shots = plan["shots"]
+    fps = plan["fps"]
+    segdir = wd / "segments"
+    shutil.rmtree(segdir, ignore_errors=True)
+    segdir.mkdir(parents=True, exist_ok=True)
+
+    def soft(i: int) -> float:
+        # boundary after shot i is a real transition, not a hard cut
+        if i >= len(shots) - 1:
+            return 0.0
+        kind = shots[i].get("transition") or "cut"
+        d = float(shots[i]["t_out"])
+        return d if kind != "cut" and d >= 2.0 / fps else 0.0
+
+    jobs = []
+    order = []
+    for i, shot in enumerate(shots):
+        head = soft(i - 1) if i > 0 else 0.0
+        body_len = round(float(shot["duration"]) - head, 3)
+        body = segdir / f"b{i:03d}.mp4"
+        jobs.append([ffmpeg_bin(cfg), "-y", "-v", "error",
+                     "-ss", f"{head:.3f}", "-i", shot["clip_file"],
+                     "-t", f"{body_len:.3f}"] + _seg_encode(cfg, fps) + [str(body)])
+        order.append(body)
+        d = soft(i)
+        if d > 0:
+            kind = shots[i].get("transition") or "dissolve"
+            trans = XFADE_ALIASES.get(kind, kind)
+            tr = segdir / f"t{i:03d}.mp4"
+            jobs.append([ffmpeg_bin(cfg), "-y", "-v", "error",
+                         "-ss", f"{float(shot['duration']):.3f}", "-t", f"{d:.3f}",
+                         "-i", shot["clip_file"],
+                         "-t", f"{d:.3f}", "-i", shots[i + 1]["clip_file"],
+                         "-filter_complex",
+                         f"[0:v]fps={fps},settb=AVTB[a];[1:v]fps={fps},settb=AVTB[b];"
+                         f"[a][b]xfade=transition={trans}:duration={d:.3f}:offset=0[v]",
+                         "-map", "[v]"] + _seg_encode(cfg, fps) + [str(tr)])
+            order.append(tr)
+
+    with ThreadPoolExecutor(max_workers=_jobs(cfg)) as pool:
+        list(pool.map(lambda c: run(c, desc=Path(c[-1]).stem), jobs))
+    return order
+
+
 def assemble(plan: dict, wd: Path, out_path: Path, *, cfg: dict | None = None,
              burn_subs: bool = True, crf: int = 20, preset: str = "medium") -> Path:
     cfg = cfg or load_config()
     shots = plan["shots"]
-    clips = [Path(s["clip_file"]) for s in shots]
     total = float(plan["total_duration"])
-    ff = [ffmpeg_bin(cfg), "-y", "-v", "error", "-stats"]
-    for clip in clips:
-        ff += ["-i", str(clip)]
+
+    segments = _build_segments(plan, wd, cfg)
+    lst = wd / "segments" / "list.txt"
+    lst.write_text("".join(f"file '{Path(s).resolve().as_posix()}'\n" for s in segments),
+                   encoding="utf-8")
+
+    ff = [ffmpeg_bin(cfg), "-y", "-v", "error", "-stats",
+          "-f", "concat", "-safe", "0", "-i", str(lst)]
     inputs = []
-    idx = len(clips)
+    idx = 1
     for shot in shots:
         if shot.get("vo_file"):
             ff += ["-i", str(shot["vo_file"])]
@@ -228,22 +326,7 @@ def assemble(plan: dict, wd: Path, out_path: Path, *, cfg: dict | None = None,
             idx += 1
 
     graph = []
-    if len(clips) == 1:
-        vlabel = "0:v"
-    else:
-        prev = "0:v"
-        clock = 0.0
-        for i in range(1, len(clips)):
-            dur = float(shots[i - 1]["t_out"]) or 1.0 / plan["fps"]
-            clock += float(shots[i - 1]["duration"])
-            kind = shots[i - 1]["transition"]
-            trans = XFADE_ALIASES.get(kind, kind)
-            lbl = f"vx{i}"
-            graph.append(f"[{prev}][{i}:v]xfade=transition={trans}:duration={dur:.4f}:"
-                         f"offset={clock:.4f}[{lbl}]")
-            prev = lbl
-        vlabel = prev
-
+    vlabel = "0:v"
     if burn_subs and plan["subtitles"].get("enabled", True):
         ass = pc_subs.build_ass(plan, wd / "subs.ass")
         graph.append(f"[{vlabel}]ass=filename='{_ffpath(ass)}'[vout]")
@@ -259,10 +342,11 @@ def assemble(plan: dict, wd: Path, out_path: Path, *, cfg: dict | None = None,
     else:
         ff += ["-an"]
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    ff += ["-c:v", "libx264", "-preset", preset, "-crf", str(crf),
-           "-pix_fmt", "yuv420p", "-r", str(plan["fps"]),
+    ff += _final_codec(cfg, crf, preset)
+    ff += ["-pix_fmt", "yuv420p", "-r", str(plan["fps"]),
            "-movflags", "+faststart", "-t", f"{total:.3f}", str(out_path)]
-    info(f"final render: {out_path.name} ({total:.1f}s, {len(clips)} shots)")
+    info(f"final render: {out_path.name} ({total:.1f}s, {len(shots)} shots, "
+         f"{len(segments)} segments)")
     run(ff, desc="final assembly", quiet=True)
     pc_subs.build_srt(plan, out_path.with_suffix(".srt"))
     return out_path
@@ -273,6 +357,9 @@ def render_all(plan: dict, wd: Path, out_path: Path, *, cfg: dict | None = None,
                preset: str = "medium") -> Path:
     cfg = cfg or load_config()
     finalize_timeline(plan)
-    for shot in plan["shots"]:
-        shot["clip_file"] = str(render_shot(shot, plan, wd, cfg, force=force))
+    with ThreadPoolExecutor(max_workers=_jobs(cfg)) as pool:
+        files = pool.map(lambda s: str(render_shot(s, plan, wd, cfg, force=force)),
+                         plan["shots"])
+        for shot, f in zip(plan["shots"], files):
+            shot["clip_file"] = f
     return assemble(plan, wd, out_path, cfg=cfg, burn_subs=burn_subs, crf=crf, preset=preset)
