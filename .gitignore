@@ -6,3 +6,5 @@ __pycache__/
 *.srt
 *.ass
 .DS_Store
+.idea/
+video129/

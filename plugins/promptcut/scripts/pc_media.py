@@ -188,8 +188,9 @@ def openrouter_tts_marks(text: str, out: Path, cfg: dict, *, voice: str | None,
         # (the failure mode we guard against is the model narrating extra text)
         from pc_common import ffprobe_duration, load_config
         dur = ffprobe_duration(path, load_config())
-        expected = max(1.0, len(text) / CHARS_PER_SEC)
-        if ratio >= 0.45 and 0.55 * expected <= dur <= 1.8 * expected:
+        # fixed overhead: short utterances carry breaths and pauses
+        expected = 1.2 + len(text) / CHARS_PER_SEC
+        if ratio >= 0.45 and 0.5 * expected <= dur <= 2.0 * expected:
             warn(f"voice accepted by duration sanity (match {ratio:.2f}, "
                  f"{dur:.1f}s vs ~{expected:.1f}s): {text[:60]}")
         else:
