@@ -219,8 +219,20 @@ def card(text: str, out, *, size: str = "1920x1080", title: str | None = None,
     if not letters and fsize < h * 0.10 and " " in plain:
         fsize = min(h * 0.14, fsize * 2.2)
     font = _font(max(int(fsize), 14), font_path)
-    gapw, divw, total = measure(font)
-    lines = [chars] if letters or total <= avail else _wrap_lines(chars, font, gapw, divw, avail)
+
+    def line_width(line, gw, dw):
+        return (sum(max(font.getlength(c), font.size * 0.22) for c, _, _ in line)
+                + gw * (len(line) - 1) + dw * sum(1 for _, dv, _ in line if dv))
+
+    # wrap, then shrink until the widest line (e.g. one unbreakable word) fits
+    for _ in range(4):
+        gapw, divw, total = measure(font)
+        lines = ([chars] if letters or total <= avail
+                 else _wrap_lines(chars, font, gapw, divw, avail))
+        widest = max(line_width(line, gapw, divw) for line in lines)
+        if widest <= avail or font.size <= 14:
+            break
+        font = _font(max(14, int(font.size * avail / widest)), font_path)
 
     ascent, descent = font.getmetrics()
     line_h = (ascent + descent) * 1.12
@@ -249,6 +261,7 @@ def card(text: str, out, *, size: str = "1920x1080", title: str | None = None,
                 d.line([dx, base_y - ascent * 0.68, dx, base_y + descent * 0.15],
                        fill=_rgba(accent, 170), width=max(3, font.size // 26))
                 x += divw
+        y += line_h
     if letters:
         count = count or sum(1 for c, _, _ in chars if c.isalnum())
 
