@@ -108,6 +108,18 @@ deliberately re-pay for media. `--stage render` re-renders from cached media.
   `min_shot`. Silent shots use `min_duration`.
 - `voice.provider`: `openrouter` (paid, best), `edge` (free, needs
   `pip install edge-tts`, Russian voices like `ru-RU-DmitryNeural`), `fake`.
+- **Write every number as words in `vo`** («сто двадцать девять», not «129») -
+  TTS models misread digits, dates and codes. Digits are fine in `subtitle`,
+  `overlay` and cards. Mark ambiguous Russian stress with U+0301 after the
+  vowel («он стои́т за») - edge voices honor it.
+- `sentence`: give several consecutive shots the same sentence id and put in
+  each `vo` its word-slice («Он стоял не у молока.» → shots `у молока` /
+  `и не у крупы`...). The whole sentence is voiced as ONE natural tts call, and
+  the cuts land exactly on word boundaries (edge word marks; for openrouter the
+  audio is whisper-aligned and verified verbatim, drifting takes are retried).
+  Use this whenever the person wants a picture per word - never voice single
+  words as separate shots, the pauses between them sound robotic. Member shots
+  ignore `min_shot` (their length = their words), so keep 1-4 words per member.
 
 ## Commands
 

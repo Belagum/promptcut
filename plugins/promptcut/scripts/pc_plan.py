@@ -48,6 +48,7 @@ SHOT_DEFAULTS = {
     "focus": None, "ease": False, "motion_amp": None,
     "transition": None, "transition_duration": None, "min_duration": None,
     "sfx": None, "sfx_gain_db": -8.0, "overlay": None, "subtitle": None, "seed": None,
+    "sentence": None,
 }
 
 
@@ -156,6 +157,18 @@ def compute_timeline(plan: dict) -> dict:
     n = len(plan["shots"])
     for i, shot in enumerate(plan["shots"]):
         vo = float(shot.get("vo_duration") or 0.0)
+        if shot.get("sentence"):
+            # word-sliced member of a sentence group: duration must track the
+            # audio exactly, so no min_shot floor and edge paddings only at ends
+            g_lead = lead if shot.get("_g_first") else 0.0
+            g_tail = tail if shot.get("_g_last") else 0.0
+            dur = max(vo + g_lead + g_tail, 2.0 / plan["fps"])
+            shot["duration"] = round(dur, 3)
+            shot["start"] = round(clock, 3)
+            shot["vo_start"] = round(clock + g_lead, 3)
+            shot["t_out"] = 0.0 if i == n - 1 else float(shot["transition_duration"])
+            clock += dur
+            continue
         base = (vo + lead + tail) if vo else float(shot.get("min_duration") or t["min_shot"] + 1.0)
         dur = max(base, float(shot.get("min_duration") or t["min_shot"]))
         shot["duration"] = round(dur, 3)

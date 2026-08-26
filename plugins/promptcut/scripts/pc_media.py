@@ -2,6 +2,7 @@
 """Media generation for a storyboard: speech and images, cached, with a stub mode."""
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -94,6 +95,92 @@ def placeholder_voice(text: str, out: Path, cfg: dict, speed: float = 1.0) -> Pa
     return out
 
 
+def _norm_words(text: str) -> list:
+    import re
+    text = (text or "").lower().replace("ё", "е").replace("́", "")
+    return re.findall(r"[a-zа-яіїєґ0-9]+", text)
+
+
+def edge_tts_marks(text: str, out: Path, cfg: dict, voice: str | None = None,
+                   speed: float = 1.0) -> tuple:
+    """In-process edge synthesis that also captures per-word time boundaries."""
+    import asyncio
+    voice = voice or cfg.get("edge_voice") or "ru-RU-DmitryNeural"
+    out = out.with_suffix(".mp3")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    rate = int(round((speed - 1.0) * 100))
+    kw = {"rate": f"{rate:+d}%"} if rate else {}
+
+    async def go():
+        import edge_tts
+        comm = edge_tts.Communicate(text, voice, **kw)
+        marks, buf = [], bytearray()
+        async for chunk in comm.stream():
+            if chunk["type"] == "audio":
+                buf.extend(chunk["data"])
+            elif chunk["type"] == "WordBoundary":
+                t0 = chunk["offset"] / 1e7
+                marks.append({"w": chunk["text"], "t0": round(t0, 3),
+                              "t1": round(t0 + chunk["duration"] / 1e7, 3)})
+        return bytes(buf), marks
+
+    last = ""
+    for pause in (0, 2, 5, 12):
+        if pause:
+            time.sleep(pause)
+        try:
+            data, marks = asyncio.run(go())
+            if len(data) >= 512:
+                out.write_bytes(data)
+                return out, marks
+            last = f"empty audio ({len(data)} bytes)"
+        except ModuleNotFoundError:
+            die("edge-tts is not installed: pip install edge-tts")
+        except Exception as exc:  # noqa: BLE001
+            last = str(exc)
+        warn(f"edge-tts retry: {last[:200]}")
+    die(f"edge-tts failed: {last[:400]}")
+
+
+def openrouter_tts_marks(text: str, out: Path, cfg: dict, *, voice: str | None,
+                         model: str | None, speed: float = 1.0,
+                         instructions: str | None = None) -> tuple:
+    """Chat-audio voices can drift from the script, so transcribe the result,
+    demand a verbatim match, and keep word timestamps for sentence cutting."""
+    import difflib
+    want = _norm_words(text)
+    best = None
+    tries = []
+    for attempt in range(3):
+        tmp = out.with_name(f"{out.stem}.try{attempt}.mp3")
+        tries.append(tmp)
+        orr.synth_speech(text, tmp, cfg=cfg, model=model, voice=voice,
+                         speed=speed, instructions=instructions)
+        tr = orr.transcribe(tmp, cfg=cfg, language="ru", granularity="word")
+        words = [{"w": str(w.get("word", "")).strip(),
+                  "t0": round(float(w.get("start", 0.0)), 3),
+                  "t1": round(float(w.get("end", 0.0)), 3)}
+                 for w in (tr.get("words") or [])]
+        got = _norm_words(" ".join(w["w"] for w in words))
+        ratio = difflib.SequenceMatcher(None, want, got).ratio()
+        if best is None or ratio > best[0]:
+            best = (ratio, tmp, words)
+        if ratio >= 0.9:
+            break
+        warn(f"tts verbatim match {ratio:.2f} on attempt {attempt + 1}, retrying")
+    ratio, path, words = best
+    if ratio < 0.7:
+        die(f"voice model keeps drifting from the script (match {ratio:.2f}): {text[:90]}")
+    if ratio < 0.9:
+        warn(f"voice accepted with verbatim match {ratio:.2f}: {text[:60]}")
+    if path != out:
+        shutil.copyfile(path, out)
+    for t in tries:
+        if t != out:
+            t.unlink(missing_ok=True)
+    return out, words
+
+
 def edge_tts(text: str, out: Path, cfg: dict, voice: str | None = None,
              speed: float = 1.0) -> Path:
     voice = voice or cfg.get("edge_voice") or "ru-RU-DmitryNeural"
@@ -123,6 +210,63 @@ def edge_tts(text: str, out: Path, cfg: dict, voice: str | None = None,
     if "No module named" in msg:
         die("edge-tts is not installed: pip install edge-tts")
     die(f"edge-tts failed:\n{msg}")
+
+
+def _member_spans(members: list, marks: list, total: float) -> list:
+    """Split [0, total] into per-member spans using word marks; each member's
+    span starts where its first word is spoken. Falls back to proportional."""
+    import difflib
+    counts = [len(_norm_words(m.get("vo") or "")) for m in members]
+    firsts = []
+    acc = 0
+    for c in counts:
+        firsts.append(acc)
+        acc += c
+
+    bounds = None
+    if marks and acc:
+        plan_tokens = []
+        for m in members:
+            plan_tokens.extend(_norm_words(m.get("vo") or ""))
+        mark_tokens, mark_idx = [], []
+        for i, mk in enumerate(marks):
+            for tok in _norm_words(mk.get("w") or ""):
+                mark_tokens.append(tok)
+                mark_idx.append(i)
+        p2m = {}
+        sm = difflib.SequenceMatcher(None, plan_tokens, mark_tokens)
+        for op, a0, a1, b0, b1 in sm.get_opcodes():
+            if op == "equal":
+                for k in range(a1 - a0):
+                    p2m[a0 + k] = mark_idx[b0 + k]
+        if len(p2m) >= max(2, acc // 2):
+            bounds = [0.0]
+            for f in firsts[1:]:
+                j = next((p2m[i] for i in range(f, acc) if i in p2m), None)
+                t = float(marks[j]["t0"]) if j is not None else None
+                prev = bounds[-1]
+                bounds.append(min(total, max(prev, t)) if t is not None else prev)
+            # unresolved bounds collapsed onto prev; spread them evenly forward
+            for i in range(1, len(bounds)):
+                if bounds[i] <= bounds[i - 1]:
+                    nxt = next((bounds[j] for j in range(i + 1, len(bounds))
+                                if bounds[j] > bounds[i - 1]), total)
+                    bounds[i] = bounds[i - 1] + (nxt - bounds[i - 1]) * 0.5
+
+    if bounds is None:
+        chars = [max(1, len((m.get("vo") or "").strip())) for m in members]
+        csum = sum(chars)
+        bounds, run = [0.0], 0.0
+        for c in chars[:-1]:
+            run += total * c / csum
+            bounds.append(round(run, 3))
+
+    spans = []
+    for i in range(len(members)):
+        t0 = bounds[i]
+        t1 = bounds[i + 1] if i + 1 < len(members) else total
+        spans.append((round(t0, 3), round(max(t1, t0 + 0.2), 3)))
+    return spans
 
 
 def _voice_conf(plan: dict, cfg: dict) -> dict:
@@ -156,13 +300,79 @@ def ensure_media(plan: dict, wd: Path, *, fake: bool = False, workers: int = 4,
     (wd / "img").mkdir(parents=True, exist_ok=True)
     jobs = []
 
+    # consecutive shots sharing a "sentence" id speak as ONE tts call; each
+    # member's vo is its word slice, video cuts land on word boundaries
+    groups: dict = {}
     for shot in plan["shots"]:
-        jobs.append(("vo", shot))
+        gid = shot.get("sentence")
+        if gid:
+            groups.setdefault(gid, []).append(shot)
+
+    seen = set()
+    for shot in plan["shots"]:
+        gid = shot.get("sentence")
+        if gid:
+            if gid not in seen:
+                seen.add(gid)
+                jobs.append(("vo_group", groups[gid]))
+        else:
+            jobs.append(("vo", shot))
         jobs.append(("img", shot))
 
     def do(job):
         kind, shot = job
         try:
+            if kind == "vo_group":
+                members = shot
+                gid = members[0]["sentence"]
+                full = " ".join((m.get("vo") or "").strip() for m in members).strip()
+                if not full:
+                    for m in members:
+                        m["vo_file"], m["vo_duration"] = None, 0.0
+                    return
+                key = sha("tts3", full, voice["provider"], voice["model"],
+                          voice["voice"], voice["speed"], "fake" if fake else "real")
+                cached = tts_cache / f"{key}.mp3"
+                marks_file = tts_cache / f"{key}.marks.json"
+
+                def synth_group():
+                    if fake or voice["provider"] == "none":
+                        placeholder_voice(full, cached, cfg, voice["speed"])
+                        marks = []
+                    elif voice["provider"] == "edge":
+                        _, marks = edge_tts_marks(full, cached, cfg,
+                                                  voice["voice"], voice["speed"])
+                    else:
+                        _, marks = openrouter_tts_marks(
+                            full, cached, cfg, voice=voice["voice"], model=voice["model"],
+                            speed=voice["speed"], instructions=voice.get("instructions"))
+                    marks_file.write_text(json.dumps(marks, ensure_ascii=False),
+                                          encoding="utf-8")
+                    info(f"voice [{gid}] done ({len(members)} shots)")
+
+                if force or not cached.exists() or not marks_file.exists():
+                    synth_group()
+                else:
+                    info(f"voice [{gid}] cached")
+                dst = wd / "audio" / f"g_{gid}.mp3"
+                shutil.copyfile(cached, dst)
+                try:
+                    total = ffprobe_duration(dst, cfg)
+                except SystemExit:
+                    warn(f"voice [{gid}]: cached file is corrupt, regenerating")
+                    cached.unlink(missing_ok=True)
+                    synth_group()
+                    shutil.copyfile(cached, dst)
+                    total = ffprobe_duration(dst, cfg)
+                marks = json.loads(marks_file.read_text(encoding="utf-8"))
+                spans = _member_spans(members, marks, round(total, 3))
+                for m, (t0, t1) in zip(members, spans):
+                    m["vo_duration"] = round(t1 - t0, 3)
+                    m["vo_file"] = None
+                    m["_g_first"] = m is members[0]
+                    m["_g_last"] = m is members[-1]
+                members[0]["vo_file"] = str(dst)
+                return
             if kind == "vo":
                 if not shot["vo"]:
                     shot["vo_file"] = None
