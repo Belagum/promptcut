@@ -37,7 +37,7 @@ how to fix it. The short version:
 ```
 winget install Gyan.FFmpeg          # Windows; brew install ffmpeg on macOS
 setx OPENROUTER_API_KEY sk-or-...   # for generated images and TTS
-pip install pycapcut edge-tts       # optional: CapCut export, free voices
+pip install pycapcut edge-tts pillow yt-dlp   # optional: CapCut, free voices, callouts, web media
 ```
 
 Python 3.10+ and ffmpeg are the only hard requirements. Everything else buys you
@@ -56,14 +56,29 @@ via `edge-tts` — including good Russian ones. Shot length follows the real aud
 length, so the picture never cuts mid-sentence.
 
 **Pictures.** Generated through OpenRouter (`/api/v1/images` — Seedream,
-gpt-image, whatever your key can reach), or pulled from stock: Pexels, Unsplash,
-Pixabay with a free key; Openverse and Wikimedia Commons with no key at all.
-Music and sound effects come from Freesound, Jamendo or Openverse.
+gpt-image, whatever your key can reach), edited or combined from your photos
+(`image-edit`), or pulled from stock: Pexels, Unsplash, Pixabay with a free key;
+Openverse, Wikimedia Commons and archive.org with no key at all. Music and sound
+effects come from Freesound, Jamendo, archive.org or Openverse — and `media-dl`
+(yt-dlp) searches the wider web and downloads any clip, or just the 2.5 seconds
+of it you need.
 
 **Editing.** Trim, join with crossfades, overlay logos and PiP, burn text and
 subtitles, mix a ducked music bed, change speed with pitch kept, reframe to 9:16
 with blurred bars, strip pauses out of a talking head, detect scene cuts, grab
 thumbnails, normalise loudness to −16 LUFS.
+
+**Callouts and cards.** `annotate` draws circles, arrows, boxes and labels on a
+photo or on video — with timing and blinking. `kenburns --focus` pushes into an
+exact point of a still, eased. `card` renders exact-text typography (image
+models mangle text): per-letter numbering, colored substrings, morpheme
+dividers — the "here's the proof on screen" shot.
+
+**Eyes and ears.** Claude can't play media, so the toolbox gives it senses:
+`frames` makes a timestamped contact sheet of any video, `waveform` draws the
+waveform, spectrogram and loudness of any audio, and `ask` sends an image or an
+mp3 to any multimodal OpenRouter model — "what does this track sound like,
+where's the drop?" — before a cent lands on the timeline.
 
 **CapCut.** Writes a real CapCut project: multiple video, audio, text, effect and
 filter tracks, plus transitions (1137 of them), scene effects (1583), filters

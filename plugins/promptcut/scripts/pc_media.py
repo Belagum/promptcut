@@ -184,14 +184,14 @@ def ensure_media(plan: dict, wd: Path, *, fake: bool = False, workers: int = 4,
                 if source:
                     src = Path(str(source)).expanduser()
                     dst = wd / "img" / f"{shot['id']}{src.suffix.lower()}"
-                    shutil.copyfile(src, dst)
+                    shutil.copy2(src, dst)
                     shot["video_file"] = str(dst)
                     shot["image_file"] = None
                     return
                 if shot.get("image"):
                     src = Path(str(shot["image"])).expanduser()
                     dst = wd / "img" / f"{shot['id']}{src.suffix.lower() or '.png'}"
-                    shutil.copyfile(src, dst)
+                    shutil.copy2(src, dst)
                     shot["image_file"] = str(dst)
                     return
                 if not shot["image_prompt"]:
@@ -213,7 +213,7 @@ def ensure_media(plan: dict, wd: Path, *, fake: bool = False, workers: int = 4,
                 else:
                     info(f"image {shot['id']} cached")
                 dst = wd / "img" / f"{shot['id']}{hit.suffix}"
-                shutil.copyfile(hit, dst)
+                shutil.copy2(hit, dst)
                 shot["image_file"] = str(dst)
         except SystemExit:
             raise

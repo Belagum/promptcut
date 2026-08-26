@@ -45,6 +45,7 @@ VIDEO_EXT = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v", ".mpg", ".mpeg", "
 SHOT_DEFAULTS = {
     "id": None, "vo": "", "image_prompt": "", "image": None, "video": None,
     "video_in": 0.0, "video_speed": 1.0, "motion": "auto",
+    "focus": None, "ease": False, "motion_amp": None,
     "transition": None, "transition_duration": None, "min_duration": None,
     "sfx": None, "sfx_gain_db": -8.0, "overlay": None, "subtitle": None, "seed": None,
 }

@@ -12,6 +12,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import pc_capcut  # noqa: E402
+import pc_dl  # noqa: E402
+import pc_draw  # noqa: E402
 import pc_edit  # noqa: E402
 import pc_media  # noqa: E402
 import pc_openrouter as orr  # noqa: E402
@@ -73,10 +75,23 @@ def cmd_doctor(args):
         "config_file": str(CONFIG_PATH) if CONFIG_PATH.exists() else None,
         "font": pc_media.font_file(),
         "image_model": cfg.get("image_model"),
+        "image_edit_model": cfg.get("image_edit_model"),
+        "chat_model": cfg.get("chat_model"),
         "tts": f"{cfg.get('tts_provider')} / {cfg.get('tts_model')}",
         "stock_keys": sorted(k for k, v in (cfg.get("stock_keys") or {}).items() if v),
         "spend_usd": round(spend_total(), 4),
     }
+    try:
+        import PIL  # noqa: F401,PLC0415
+        checks["pillow"] = True
+    except ImportError:
+        checks["pillow"] = False
+    import shutil as _sh
+    try:
+        import yt_dlp  # noqa: F401,PLC0415
+        checks["yt_dlp"] = True
+    except ImportError:
+        checks["yt_dlp"] = bool(_sh.which("yt-dlp"))
     try:
         import pycapcut  # noqa: F401,PLC0415
         checks["pycapcut"] = True
@@ -98,6 +113,10 @@ def cmd_doctor(args):
                         "(image and voice generation off; --fake and editing still work)")
     if not checks["pycapcut"]:
         problems.append("pycapcut missing, no CapCut export: pip install pycapcut")
+    if not checks["pillow"]:
+        problems.append("pillow missing, no annotate/card: pip install pillow")
+    if not checks["yt_dlp"]:
+        problems.append("yt-dlp missing, no media-dl: pip install yt-dlp")
     checks["problems"] = problems
     out_json(checks)
 
@@ -169,6 +188,84 @@ def cmd_find(args, kind):
     hit = pc_stock.fetch_best(args.query, Path(args.out), kind=kind, cfg=cfg,
                               provider=args.provider, orientation=args.orientation)
     out_json(hit)
+
+
+def cmd_ask(args):
+    cfg = load_config()
+    files, tmp = [], None
+    for f in args.file or []:
+        p = Path(f)
+        if not p.exists():
+            die(f"attachment not found: {p}")
+        suf = p.suffix.lower()
+        if suf in pc_plan.VIDEO_EXT:
+            die("video attachments are not supported; make a contact sheet first: "
+                "promptcut frames -i video.mp4 --out sheet.jpg")
+        if suf in (".m4a", ".ogg", ".opus", ".aac", ".flac", ".wma"):
+            import tempfile
+            from pc_common import ffmpeg_bin, run
+            tmp = tmp or Path(tempfile.mkdtemp())
+            conv = tmp / (p.stem + ".mp3")
+            run([ffmpeg_bin(cfg), "-y", "-v", "error", "-i", str(p), "-vn",
+                 "-c:a", "libmp3lame", "-q:a", "3", str(conv)], desc="convert to mp3")
+            p = conv
+        files.append(p)
+    result = orr.chat(args.prompt, cfg=cfg, model=args.model, system=args.system,
+                      files=files, json_mode=args.json, max_tokens=args.max_tokens)
+    if tmp:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+    out_json(result)
+
+
+def cmd_image_edit(args):
+    cfg = load_config()
+    path = orr.edit_image(args.prompt, args.image, Path(args.out), cfg=cfg, model=args.model)
+    out_json({"file": str(path), "prompt": args.prompt})
+
+
+def _load_spec(spec: str):
+    s = spec.strip()
+    if s.startswith("[") or s.startswith("{"):
+        try:
+            return json.loads(s)
+        except json.JSONDecodeError as exc:
+            die(f"--spec is not valid JSON ({exc})")
+    p = Path(spec)
+    if p.exists():
+        return json.loads(p.read_text(encoding="utf-8"))
+    die(f"--spec must be inline JSON or a path to a JSON file, got: {spec[:80]}")
+
+
+def cmd_annotate(args):
+    out_json(pc_draw.annotate(args.i, args.out, _load_spec(args.spec)))
+
+
+def cmd_card(args):
+    out_json(pc_draw.card(args.text, args.out, size=args.size, title=args.title,
+                          sub=args.sub, letters=args.letters, highlights=args.highlight,
+                          bg=args.bg, fg=args.fg, accent=args.accent,
+                          transparent=args.transparent, font_path=args.font))
+
+
+def cmd_frames(args):
+    out_json(pc_edit.frames(args.i, args.out, args.n, args.cols, args.width))
+
+
+def cmd_waveform(args):
+    out_json(pc_edit.waveform(args.i, args.out, args.width, args.height))
+
+
+def cmd_media_dl(args):
+    if args.search:
+        out_json(pc_dl.search(args.search, args.n))
+        return
+    if not (args.url and args.out):
+        die("need --url and --out to download, or --search to look around")
+    path = pc_dl.fetch(args.url, args.out, audio=args.audio, start=args.start,
+                       end=args.end, fmt=args.format)
+    from pc_common import ffprobe_duration
+    out_json({"file": str(path), "duration": round(ffprobe_duration(path, load_config()), 3)})
 
 
 def cmd_transcribe(args):
@@ -269,8 +366,10 @@ def cmd_normalize(args):
 
 def cmd_kenburns(args):
     w, _, h = args.size.partition("x")
+    focus = [float(v) for v in args.focus.split(",")] if args.focus else None
     out_json({"file": str(pc_edit.still_to_clip(args.image, args.out, args.dur, args.motion,
-                                                int(w), int(h), args.fps, args.amp))})
+                                                int(w), int(h), args.fps, args.amp,
+                                                focus=focus, ease=args.ease))})
 
 
 def cmd_plan_new(args):
@@ -395,6 +494,63 @@ def build_parser():
         sp.add_argument("-n", type=int, default=6)
         sp.add_argument("--list", action="store_true", help="only print results")
 
+    sp = add("ask", cmd_ask, "ask any OpenRouter model; attach images or audio (listen to files)")
+    sp.add_argument("--prompt", required=True)
+    sp.add_argument("--file", action="append",
+                    help="attachment: png/jpg/webp/gif image or mp3/wav/m4a/ogg audio")
+    sp.add_argument("--model")
+    sp.add_argument("--system")
+    sp.add_argument("--json", action="store_true", help="force a JSON object answer")
+    sp.add_argument("--max-tokens", type=int)
+
+    sp = add("image-edit", cmd_image_edit, "edit or combine images with a prompt")
+    sp.add_argument("--prompt", required=True)
+    sp.add_argument("--image", action="append", required=True, help="input image, repeatable")
+    sp.add_argument("--out", required=True)
+    sp.add_argument("--model")
+
+    sp = add("annotate", cmd_annotate, "draw circles, arrows, boxes, labels on image or video")
+    sp.add_argument("-i", required=True)
+    sp.add_argument("--out", required=True)
+    sp.add_argument("--spec", required=True, help="JSON list of shapes, or a path to it")
+
+    sp = add("card", cmd_card, "typography card: exact text, letter numbers, highlights")
+    sp.add_argument("--text", required=True, help="use | for group dividers: 'Ч|ИП|СЫ'")
+    sp.add_argument("--out", required=True)
+    sp.add_argument("--size", default="1920x1080")
+    sp.add_argument("--title")
+    sp.add_argument("--sub")
+    sp.add_argument("--letters", action="store_true", help="number every letter")
+    sp.add_argument("--highlight", action="append", help="substring to color, repeatable")
+    sp.add_argument("--bg", default="#10141F")
+    sp.add_argument("--fg", default="#FFFFFF")
+    sp.add_argument("--accent", default="#FFD23F")
+    sp.add_argument("--transparent", action="store_true", help="RGBA card for overlaying")
+    sp.add_argument("--font")
+
+    sp = add("frames", cmd_frames, "contact sheet of frames, to look at a video")
+    sp.add_argument("-i", required=True)
+    sp.add_argument("--out", required=True)
+    sp.add_argument("-n", type=int, default=12)
+    sp.add_argument("--cols", type=int)
+    sp.add_argument("--width", type=int, default=480)
+
+    sp = add("waveform", cmd_waveform, "waveform + spectrogram image, to look at audio")
+    sp.add_argument("-i", required=True)
+    sp.add_argument("--out", required=True)
+    sp.add_argument("--width", type=int, default=1200)
+    sp.add_argument("--height", type=int, default=520)
+
+    sp = add("media-dl", cmd_media_dl, "search or download web media via yt-dlp")
+    sp.add_argument("--url")
+    sp.add_argument("--out")
+    sp.add_argument("--search", help="search instead of downloading")
+    sp.add_argument("-n", type=int, default=5)
+    sp.add_argument("--audio", action="store_true", help="audio only (or use .mp3 out)")
+    sp.add_argument("--start", type=float)
+    sp.add_argument("--end", type=float)
+    sp.add_argument("--format", help="raw yt-dlp -f selector")
+
     sp = add("transcribe", cmd_transcribe, "speech to text with timings")
     sp.add_argument("--file", required=True)
     sp.add_argument("--srt")
@@ -514,7 +670,10 @@ def build_parser():
                              "pan_down", "still"])
     sp.add_argument("--size", default="1080x1920")
     sp.add_argument("--fps", type=int, default=30)
-    sp.add_argument("--amp", type=float, default=0.12)
+    sp.add_argument("--amp", type=float, default=0.12,
+                    help="zoom depth: 0.12 subtle, 1.5 = push in to 2.5x")
+    sp.add_argument("--focus", help="zoom target on the source image, e.g. 0.62,0.41")
+    sp.add_argument("--ease", action="store_true", help="smooth in/out instead of linear")
 
     sp = add("plan-new", cmd_plan_new, "write a starter plan.json")
     sp.add_argument("--out", default="plan.json")

@@ -1,3 +1,5 @@
 # Core needs nothing but python 3.10+ and ffmpeg.
 pycapcut>=0.1        # CapCut draft export
 edge-tts>=6.1        # free voiceover instead of paid TTS
+pillow>=10.0         # annotate (callouts) and card (typography)
+yt-dlp>=2024.1       # media-dl: fetch reference clips, music, sfx from the web

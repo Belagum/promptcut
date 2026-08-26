@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""OpenRouter client on stdlib only: images, speech, transcription."""
+"""OpenRouter client on stdlib only: images, speech, transcription, chat."""
 from __future__ import annotations
 
 import base64
@@ -165,6 +165,96 @@ def transcribe(audio_path: Path, *, cfg: dict, model: str | None = None,
     body, _ = _request("POST", "/audio/transcriptions", cfg=cfg, payload=payload, timeout=240)
     log_spend("transcribe", model, (body.get("usage") or {}).get("cost"), str(audio_path))
     return body
+
+
+IMAGE_MIME = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+              ".webp": "image/webp", ".gif": "image/gif"}
+AUDIO_FORMATS = {".mp3": "mp3", ".wav": "wav"}
+MAX_ATTACH_MB = 24
+
+
+def _file_part(path: Path) -> dict:
+    suffix = path.suffix.lower()
+    data = base64.b64encode(path.read_bytes()).decode("ascii")
+    if suffix in IMAGE_MIME:
+        return {"type": "image_url",
+                "image_url": {"url": f"data:{IMAGE_MIME[suffix]};base64,{data}"}}
+    if suffix in AUDIO_FORMATS:
+        return {"type": "input_audio",
+                "input_audio": {"data": data, "format": AUDIO_FORMATS[suffix]}}
+    die(f"unsupported attachment '{path.name}' (images: png/jpg/webp/gif, audio: mp3/wav)")
+
+
+def chat(prompt: str, *, cfg: dict, model: str | None = None, system: str | None = None,
+         files: list | None = None, json_mode: bool = False,
+         max_tokens: int | None = None) -> dict:
+    model = model or cfg.get("chat_model") or "google/gemini-2.5-flash"
+    files = [Path(f) for f in files or []]
+    total = sum(f.stat().st_size for f in files)
+    if total > MAX_ATTACH_MB * 1048576:
+        die(f"attachments too large ({total / 1048576:.1f} MB, limit {MAX_ATTACH_MB} MB)")
+    if files:
+        content = [_file_part(f) for f in files]
+        content.append({"type": "text", "text": prompt})
+    else:
+        content = prompt
+    messages = ([{"role": "system", "content": system}] if system else [])
+    messages.append({"role": "user", "content": content})
+    payload = {"model": model, "messages": messages, "usage": {"include": True}}
+    if json_mode:
+        payload["response_format"] = {"type": "json_object"}
+    if max_tokens:
+        payload["max_tokens"] = int(max_tokens)
+    body, _ = _request("POST", "/chat/completions", cfg=cfg, payload=payload, timeout=300)
+    msg = (body.get("choices") or [{}])[0].get("message") or {}
+    text = msg.get("content") or ""
+    if isinstance(text, list):
+        text = "".join(p.get("text", "") for p in text if isinstance(p, dict))
+    cost = (body.get("usage") or {}).get("cost")
+    log_spend("chat", model, cost, prompt[:120])
+    return {"text": text, "model": body.get("model") or model, "cost_usd": cost}
+
+
+def edit_image(prompt: str, images: list, out_path: Path, *, cfg: dict,
+               model: str | None = None) -> Path:
+    model = model or cfg.get("image_edit_model") or "google/gemini-2.5-flash-image"
+    content = []
+    for img in images or []:
+        img = Path(img)
+        if img.suffix.lower() not in IMAGE_MIME:
+            die(f"'{img.name}' is not an image (png/jpg/webp/gif)")
+        content.append(_file_part(img))
+    content.append({"type": "text", "text": prompt})
+    payload = {"model": model, "messages": [{"role": "user", "content": content}],
+               "modalities": ["image", "text"], "usage": {"include": True}}
+    body, _ = _request("POST", "/chat/completions", cfg=cfg, payload=payload, timeout=300)
+    msg = (body.get("choices") or [{}])[0].get("message") or {}
+    url = None
+    for item in msg.get("images") or []:
+        u = (item.get("image_url") or {}).get("url") if isinstance(item, dict) else None
+        if u:
+            url = u
+            break
+    if not url and isinstance(msg.get("content"), list):
+        for part in msg["content"]:
+            if isinstance(part, dict) and part.get("type") == "image_url":
+                url = (part.get("image_url") or {}).get("url")
+                break
+    if not url:
+        die(f"model {model} returned no image: {str(msg)[:300]}")
+    if url.startswith("data:"):
+        header, _, b64 = url.partition(",")
+        raw = base64.b64decode(b64)
+        media = header.split(";")[0].split("/")[-1].replace("jpeg", "jpg")
+    else:
+        with urllib.request.urlopen(url, timeout=120) as r:
+            raw = r.read()
+        media = "png"
+    out_path = out_path.with_suffix("." + (media if media in ("png", "jpg", "webp") else "png"))
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_bytes(raw)
+    log_spend("image-edit", model, (body.get("usage") or {}).get("cost"), prompt)
+    return out_path
 
 
 def list_models(cfg: dict, modality: str = "image") -> list:

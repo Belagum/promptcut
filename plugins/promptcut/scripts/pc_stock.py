@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Stock search and download for images, video, music and sound effects.
 
-No key needed: openverse, wikimedia.
+No key needed: openverse, wikimedia, archive.
 Free key needed: pexels, pixabay, unsplash (images, video),
 freesound, jamendo (audio). Keys live in ~/.promptcut/config.json -> "stock_keys".
 """
@@ -19,7 +19,7 @@ from pc_common import die, info, load_config, sha, warn
 UA = "PromptCut/0.1 (+https://github.com/promptcut) python-urllib"
 IMAGE_PROVIDERS = ("pexels", "unsplash", "pixabay", "openverse", "wikimedia")
 VIDEO_PROVIDERS = ("pexels", "pixabay")
-AUDIO_PROVIDERS = ("freesound", "jamendo", "openverse")
+AUDIO_PROVIDERS = ("freesound", "jamendo", "archive", "openverse")
 
 
 def _key(cfg: dict, name: str) -> str:
@@ -168,6 +168,40 @@ def _jamendo_audio(q, n, cfg, **_):
             for r in data.get("results", []) if r.get("audio")]
 
 
+def _archive_audio(q, n, cfg, **_):
+    params = _q(q=f"title:({q}) AND mediatype:(audio)", rows=max(3, n), page=1, output="json")
+    data = _get(f"https://archive.org/advancedsearch.php?{params}"
+                "&fl[]=identifier&fl[]=title&fl[]=creator")
+    out = []
+    for doc in (data.get("response") or {}).get("docs") or []:
+        ident = doc.get("identifier")
+        if not ident:
+            continue
+        try:
+            meta = _get(f"https://archive.org/metadata/{urllib.parse.quote(ident)}")
+        except Exception:  # noqa: BLE001
+            continue
+        f = next((f for f in meta.get("files") or []
+                  if str(f.get("name", "")).lower().endswith(".mp3")), None)
+        if not f:
+            continue
+        try:
+            raw = str(f.get("length") or "")
+            mm, _, ss = raw.rpartition(":")
+            dur = round(float(mm or 0) * 60 + float(ss), 2) if raw else None
+        except ValueError:
+            dur = None
+        out.append({"provider": "archive",
+                    "url": f"https://archive.org/download/{urllib.parse.quote(ident)}/"
+                           f"{urllib.parse.quote(str(f['name']))}",
+                    "title": doc.get("title") or ident, "author": doc.get("creator"),
+                    "page": f"https://archive.org/details/{ident}",
+                    "duration": dur, "license": "varies, see item page"})
+        if len(out) >= n:
+            break
+    return out
+
+
 def _openverse_audio(q, n, cfg, **_):
     data = _get(f"https://api.openverse.org/v1/audio/?{_q(q=q, page_size=n, license_type='commercial')}")
     return [{"provider": "openverse", "url": r.get("url"), "title": r.get("title") or q,
@@ -182,7 +216,7 @@ REGISTRY = {
               "wikimedia": _wikimedia_images},
     "video": {"pexels": _pexels_videos, "pixabay": _pixabay_videos},
     "audio": {"freesound": _freesound_audio, "jamendo": _jamendo_audio,
-              "openverse": _openverse_audio},
+              "archive": _archive_audio, "openverse": _openverse_audio},
 }
 ORDER = {"image": IMAGE_PROVIDERS, "video": VIDEO_PROVIDERS, "audio": AUDIO_PROVIDERS}
 
@@ -192,7 +226,8 @@ def search(query: str, kind: str = "image", n: int = 6, provider: str | None = N
     cfg = cfg or load_config()
     kind = kind if kind in REGISTRY else "image"
     providers = [provider] if provider else [p for p in ORDER[kind]
-                                             if p in ("openverse", "wikimedia") or _key(cfg, p)]
+                                             if p in ("openverse", "wikimedia", "archive")
+                                             or _key(cfg, p)]
     if not providers:
         die(f"no provider available for '{kind}'. Add a key: promptcut keys --set pexels=... "
             f"(free at pexels.com/api). openverse and wikimedia work without a key.")

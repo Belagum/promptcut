@@ -330,6 +330,46 @@ def scenes(src, threshold=0.35, cfg=None) -> list:
     return [round(float(t), 3) for t in re.findall(r"pts_time:([\d.]+)", out)]
 
 
+def frames(src, out, n=12, cols=None, width=480, cfg=None):
+    import math
+    import pc_media
+    meta = probe(src, cfg)
+    dur = max(0.001, meta["duration"])
+    n = max(1, int(n))
+    cols = int(cols or min(n, 4))
+    rows = math.ceil(n / cols)
+    ff = pc_media.font_file()
+    font = f":fontfile='{_fp(ff)}'" if ff else ""
+    vf = (f"fps={n / dur:.6f},scale={int(width)}:-2,"
+          f"drawtext=text='%{{pts\\:hms}}':x=10:y=10:fontsize={max(14, int(width * 0.05))}:"
+          f"fontcolor=white:box=1:boxcolor=black@0.5:boxborderw=6{font},"
+          f"tile={cols}x{rows}")
+    run([_ff(cfg), "-y", "-v", "error", "-i", str(src), "-vf", vf,
+         "-frames:v", "1", "-q:v", "3", str(out)], desc="contact sheet")
+    return {"file": str(out), "frames": n, "grid": f"{cols}x{rows}",
+            "duration": meta["duration"]}
+
+
+def waveform(src, out, width=1200, height=520, cfg=None):
+    meta = probe(src, cfg)
+    if not meta["has_audio"]:
+        die(f"{src} has no audio stream")
+    h1 = int(height * 0.45)
+    fc = (f"[0:a]asplit=2[a1][a2];"
+          f"[a1]showwavespic=s={int(width)}x{h1}:colors=#4FC3F7|#4FC3F7[w];"
+          f"[a2]showspectrumpic=s={int(width)}x{int(height) - h1}:legend=0[s];"
+          f"[w][s]vstack=inputs=2[v]")
+    run([_ff(cfg), "-y", "-v", "error", "-i", str(src), "-filter_complex", fc,
+         "-map", "[v]", "-frames:v", "1", str(out)], desc="waveform")
+    stats = run([_ff(cfg), "-hide_banner", "-i", str(src), "-af", "volumedetect",
+                 "-f", "null", "-"], desc="volumedetect")
+    mean = re.search(r"mean_volume:\s*(-?[\d.]+)", stats)
+    peak = re.search(r"max_volume:\s*(-?[\d.]+)", stats)
+    return {"file": str(out), "duration": meta["duration"],
+            "mean_db": float(mean.group(1)) if mean else None,
+            "peak_db": float(peak.group(1)) if peak else None}
+
+
 def thumb(src, out, at=1.0, cfg=None):
     run([_ff(cfg), "-y", "-v", "error", "-ss", f"{float(at):.3f}", "-i", str(src),
          "-frames:v", "1", "-q:v", "2", str(out)], desc="thumbnail")
@@ -353,12 +393,12 @@ def normalize_audio(src, out, target=-16.0, cfg=None):
 
 
 def still_to_clip(image, out, dur=4.0, motion="zoom_in", width=1080, height=1920, fps=30,
-                  amp=0.12, cfg=None):
+                  amp=0.12, focus=None, ease=False, cfg=None):
     import pc_render
     plan = {"width": int(width), "height": int(height), "fps": int(fps),
             "timing": {"motion_amp": amp}}
     shot = {"id": Path(out).stem, "image_file": str(image), "motion": motion,
-            "duration": float(dur), "t_out": 0.0}
+            "duration": float(dur), "t_out": 0.0, "focus": focus, "ease": bool(ease)}
     wd = Path(out).parent
     clip = pc_render.render_shot(shot, plan, wd, cfg or load_config(), force=True)
     if Path(clip) != Path(out):

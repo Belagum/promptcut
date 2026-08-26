@@ -15,5 +15,9 @@ problems it reports. Extra context: $ARGUMENTS
   `keys --set pexels=... freesound=...`. Openverse and Wikimedia need no key.
 - CapCut export: `pip install pycapcut`, then `capcut-drafts`; if the folder is
   not found, ask for CapCut → Settings → Draft location.
+- Callouts and typography cards (`annotate`, `card`): `pip install pillow`.
+- Web media downloads (`media-dl`): `pip install yt-dlp`. If YouTube demands a
+  login, `config --set ytdlp_cookies=firefox` (or chrome/edge, or a cookies.txt
+  path).
 
 Finish with a one-line summary of what works now and what is still missing.

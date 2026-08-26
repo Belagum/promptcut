@@ -6,7 +6,7 @@ import shutil
 from pathlib import Path
 
 import pc_subs
-from pc_common import ffmpeg_bin, ffprobe_duration, info, load_config, run, warn
+from pc_common import ffmpeg_bin, ffprobe_duration, info, load_config, run, sha, warn
 
 XFADE_ALIASES = {"cut": "fade", "dissolve": "dissolve", "fade": "fade"}
 
@@ -29,12 +29,47 @@ def finalize_timeline(plan: dict) -> dict:
     return plan
 
 
+def _parse_focus(focus, shot: dict):
+    if not focus:
+        return None
+    if isinstance(focus, str):
+        focus = focus.split(",")
+    try:
+        return float(focus[0]), float(focus[1])
+    except (TypeError, ValueError, IndexError):
+        warn(f"shot {shot.get('id')}: bad focus {focus!r}, expected [x,y] in 0..1")
+        return None
+
+
+def _adjust_focus(shot: dict, w: int, h: int, cfg: dict) -> None:
+    """Map focus from source-image coords onto the crop-to-cover frame."""
+    focus = _parse_focus(shot.get("focus"), shot)
+    if not focus or shot.get("motion") not in ("zoom_in", "zoom_out"):
+        return
+    import pc_edit  # noqa: PLC0415
+    meta = pc_edit.probe(shot["image_file"], cfg)
+    sw, sh = meta.get("width"), meta.get("height")
+    if not sw or not sh:
+        return
+    crop_w = min(sw, sh * w / h)
+    crop_h = min(sh, sw * h / w)
+    fx = (focus[0] * sw - (sw - crop_w) / 2) / crop_w
+    fy = (focus[1] * sh - (sh - crop_h) / 2) / crop_h
+    shot["_focus"] = [round(min(1.0, max(0.0, fx)), 4), round(min(1.0, max(0.0, fy)), 4)]
+
+
 def _zoompan(shot: dict, plan: dict, frames: int) -> str:
-    amp = float(plan["timing"]["motion_amp"])
+    amp = float(shot.get("motion_amp") or plan["timing"]["motion_amp"])
     zmax = 1.0 + amp
     m = shot["motion"]
-    prog = f"(on/{max(1, frames - 1)})"
+    p = f"(on/{max(1, frames - 1)})"
+    prog = f"({p}*{p}*(3-2*{p}))" if shot.get("ease") else p
     cx, cy = "iw/2-(iw/zoom/2)", "ih/2-(ih/zoom/2)"
+    focus = _parse_focus(shot.get("_focus") or shot.get("focus"), shot)
+    if focus and m in ("zoom_in", "zoom_out"):
+        fx, fy = focus
+        cx = f"clip(iw*{fx:.4f}-iw/(2*zoom),0,iw-iw/zoom)"
+        cy = f"clip(ih*{fy:.4f}-ih/(2*zoom),0,ih-ih/zoom)"
     if m == "zoom_in":
         z, x, y = f"1+{amp}*{prog}", cx, cy
     elif m == "zoom_out":
@@ -57,7 +92,15 @@ def render_shot(shot: dict, plan: dict, wd: Path, cfg: dict, force: bool = False
     out = wd / "clips" / f"{shot['id']}.mp4"
     out.parent.mkdir(parents=True, exist_ok=True)
     length = round(float(shot["duration"]) + float(shot["t_out"]), 3)
-    if out.exists() and not force and abs(ffprobe_duration(out, cfg) - length) < 0.08:
+    src = shot.get("video_file") or shot.get("image_file")
+    stat = Path(src).stat() if src and Path(src).exists() else None
+    key = sha("clip1", shot.get("motion"), shot.get("focus"), shot.get("ease"),
+              shot.get("motion_amp"), plan["timing"].get("motion_amp"),
+              shot.get("video_in"), shot.get("video_speed"), src,
+              stat.st_size if stat else 0, int(stat.st_mtime) if stat else 0,
+              length, plan["width"], plan["height"], plan["fps"])
+    tag = out.with_suffix(".key")
+    if out.exists() and not force and tag.exists() and tag.read_text() == key:
         info(f"clip {shot['id']} already rendered")
         return out
     w, h, fps = plan["width"], plan["height"], plan["fps"]
@@ -75,6 +118,7 @@ def render_shot(shot: dict, plan: dict, wd: Path, cfg: dict, force: bool = False
               f"format=yuv420p")
     elif shot.get("image_file"):
         big_w, big_h = w * 2, h * 2
+        _adjust_focus(shot, w, h, cfg)
         ff += ["-loop", "1", "-framerate", str(fps), "-t", f"{length}", "-i", str(shot["image_file"])]
         vf = (f"scale={big_w}:{big_h}:force_original_aspect_ratio=increase,"
               f"crop={big_w}:{big_h},setsar=1,{_zoompan(shot, plan, frames)},"
@@ -87,6 +131,7 @@ def render_shot(shot: dict, plan: dict, wd: Path, cfg: dict, force: bool = False
            "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
            "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(out)]
     run(ff, desc=f"render shot {shot['id']}")
+    tag.write_text(key)
     return out
 
 
