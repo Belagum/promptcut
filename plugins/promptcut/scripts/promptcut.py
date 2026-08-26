@@ -597,9 +597,10 @@ def build_parser():
     sp.add_argument("--json", action="store_true", help="force a JSON object answer")
     sp.add_argument("--max-tokens", type=int)
 
-    sp = add("image-edit", cmd_image_edit, "edit or combine images with a prompt")
+    sp = add("image-edit", cmd_image_edit, "edit or combine images with a prompt "
+             "(no --image = generate from text)")
     sp.add_argument("--prompt", required=True)
-    sp.add_argument("--image", action="append", required=True, help="input image, repeatable")
+    sp.add_argument("--image", action="append", default=[], help="input image, repeatable")
     sp.add_argument("--out", required=True)
     sp.add_argument("--model")
 
