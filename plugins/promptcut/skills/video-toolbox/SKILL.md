@@ -73,6 +73,7 @@ deliberately re-pay for media. `--stage render` re-renders from cached media.
      "vo": "Sentence that gets voiced and subtitled.",
      "image_prompt": "wide shot of a foggy harbour at dawn",
      "image": null,
+     "video": null, "video_in": 0.0, "video_speed": 1.0,
      "motion": "zoom_in",
      "transition": "dissolve",
      "transition_duration": 0.5,
@@ -90,8 +91,11 @@ deliberately re-pay for media. `--stage render` re-renders from cached media.
   `still` `auto` (rotates through four looks).
 - `transition`: any ffmpeg xfade name - `dissolve` `fade` `wipeleft` `slideup`
   `circleopen` `pixelize` `radial` `fadeblack` `zoomin` ... - or `cut`.
-- `image`: a local file skips generation for that shot. `subtitle`: text to show
-  instead of `vo`, or `false` to show none. `overlay`: big title over the shot.
+- `image`: a local file skips generation for that shot. `video`: use footage
+  instead of a still - it is cropped to frame, sped up by `video_speed`, started
+  at `video_in`, and looped if it is shorter than the shot. `subtitle`: text to
+  show instead of `vo`, or `false` to show none. `overlay`: big title over the
+  shot.
 - Shot length is voice length + `lead` + `tail`, floored by `min_duration` /
   `min_shot`. Silent shots use `min_duration`.
 - `voice.provider`: `openrouter` (paid, best), `edge` (free, needs
@@ -161,6 +165,10 @@ Assembly and handoff
 **Narrated video from a script the person pasted.** Split their text into shots
 at sentence boundaries, keep their wording exactly - it is their voice, do not
 rewrite unless asked. One `image_prompt` per sentence.
+
+**B-roll instead of stills.** `video-find --query "..." --out b1.mp4` per shot,
+then set `"video": "b1.mp4"` on those shots. Mix stills and footage freely; the
+timing model does not care which a shot uses.
 
 **Stock instead of generated images.** Put `image-find` results into each shot's
 `image` field, or set the whole plan to `image.model: null` and pre-fetch. Stock

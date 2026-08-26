@@ -338,7 +338,8 @@ def spec_from_plan(plan: dict, wd: Path, *, use_clips: bool = False,
                    name: str | None = None, transitions: bool = False) -> dict:
     video, audio, sfx = [], [], []
     for i, shot in enumerate(plan["shots"]):
-        src = shot.get("clip_file") if use_clips else shot.get("image_file")
+        src = (shot.get("clip_file") if use_clips
+               else shot.get("video_file") or shot.get("image_file"))
         if not src:
             continue
         conf = {

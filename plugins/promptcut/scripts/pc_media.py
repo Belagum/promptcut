@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pc_openrouter as orr
 from pc_common import (cache_dir, die, ffmpeg_bin, ffprobe_duration, info, run, sha, warn)
+from pc_plan import VIDEO_EXT
 
 CHARS_PER_SEC = 14.5  # rough ru/en speaking rate, only used to fake stub durations
 
@@ -177,6 +178,16 @@ def ensure_media(plan: dict, wd: Path, *, fake: bool = False, workers: int = 4,
                 shot["vo_file"] = str(dst)
                 shot["vo_duration"] = round(ffprobe_duration(dst, cfg), 3)
             else:
+                source = shot.get("video") or (
+                    shot.get("image")
+                    if Path(str(shot.get("image") or "")).suffix.lower() in VIDEO_EXT else None)
+                if source:
+                    src = Path(str(source)).expanduser()
+                    dst = wd / "img" / f"{shot['id']}{src.suffix.lower()}"
+                    shutil.copyfile(src, dst)
+                    shot["video_file"] = str(dst)
+                    shot["image_file"] = None
+                    return
                 if shot.get("image"):
                     src = Path(str(shot["image"])).expanduser()
                     dst = wd / "img" / f"{shot['id']}{src.suffix.lower() or '.png'}"
@@ -217,6 +228,6 @@ def ensure_media(plan: dict, wd: Path, *, fake: bool = False, workers: int = 4,
             do(job)
 
     for shot in plan["shots"]:
-        if not shot.get("image_file"):
+        if not (shot.get("image_file") or shot.get("video_file")):
             warn(f"shot {shot['id']} has no image, falling back to black")
     return plan

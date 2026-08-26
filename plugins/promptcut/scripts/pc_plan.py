@@ -40,8 +40,11 @@ DEFAULTS = {
     "shots": [],
 }
 
+VIDEO_EXT = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v", ".mpg", ".mpeg", ".wmv"}
+
 SHOT_DEFAULTS = {
-    "id": None, "vo": "", "image_prompt": "", "image": None, "motion": "auto",
+    "id": None, "vo": "", "image_prompt": "", "image": None, "video": None,
+    "video_in": 0.0, "video_speed": 1.0, "motion": "auto",
     "transition": None, "transition_duration": None, "min_duration": None,
     "sfx": None, "sfx_gain_db": -8.0, "overlay": None, "subtitle": None, "seed": None,
 }
@@ -97,14 +100,16 @@ def validate(plan: dict) -> list:
         errs.append("plan has no shots")
     for shot in plan["shots"]:
         tag = f"shot {shot['id']}"
-        if not shot["vo"] and not shot["image_prompt"] and not shot["image"]:
-            errs.append(f"{tag}: empty, needs at least vo, image_prompt or image")
+        if not (shot["vo"] or shot["image_prompt"] or shot["image"] or shot["video"]):
+            errs.append(f"{tag}: empty, needs at least vo, image_prompt, image or video")
         if shot["motion"] not in MOTIONS:
             errs.append(f"{tag}: motion='{shot['motion']}', allowed: {', '.join(MOTIONS)}")
         if shot["transition"] not in TRANSITIONS:
             errs.append(f"{tag}: transition='{shot['transition']}', allowed: {', '.join(TRANSITIONS[:8])}...")
         if shot["image"] and not Path(str(shot["image"])).expanduser().exists():
             errs.append(f"{tag}: image file not found: {shot['image']}")
+        if shot["video"] and not Path(str(shot["video"])).expanduser().exists():
+            errs.append(f"{tag}: video file not found: {shot['video']}")
         if shot["sfx"] and not Path(str(shot["sfx"])).expanduser().exists():
             errs.append(f"{tag}: sfx file not found: {shot['sfx']}")
     music = (plan.get("music") or {}).get("file")

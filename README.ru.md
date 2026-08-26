@@ -16,8 +16,17 @@ ducking», «озвучь абзац» — каждое это одна кома
 
 ## Установка
 
+From a local clone:
+
 ```
-/plugin marketplace add fedorlobanov/promptcut
+/plugin marketplace add C:\path\to\promptcut
+/plugin install promptcut@promptcut
+```
+
+From GitHub, once you have pushed it:
+
+```
+/plugin marketplace add <your-github-user>/promptcut
 /plugin install promptcut@promptcut
 ```
 

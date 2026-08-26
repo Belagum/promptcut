@@ -63,7 +63,17 @@ def render_shot(shot: dict, plan: dict, wd: Path, cfg: dict, force: bool = False
     w, h, fps = plan["width"], plan["height"], plan["fps"]
     frames = max(2, int(round(length * fps)))
     ff = [ffmpeg_bin(cfg), "-y", "-v", "error"]
-    if shot.get("image_file"):
+    if shot.get("video_file"):
+        speed = float(shot.get("video_speed") or 1.0)
+        src_len = ffprobe_duration(shot["video_file"], cfg)
+        start = float(shot.get("video_in") or 0.0)
+        if src_len - start < length * speed:
+            ff += ["-stream_loop", "-1"]
+        ff += ["-ss", f"{start:.3f}", "-i", str(shot["video_file"])]
+        vf = (f"scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},"
+              f"setsar=1,setpts=PTS/{speed:.6f},fps={fps},trim=duration={length},"
+              f"format=yuv420p")
+    elif shot.get("image_file"):
         big_w, big_h = w * 2, h * 2
         ff += ["-loop", "1", "-framerate", str(fps), "-t", f"{length}", "-i", str(shot["image_file"])]
         vf = (f"scale={big_w}:{big_h}:force_original_aspect_ratio=increase,"
