@@ -36,6 +36,7 @@ DEFAULT_CONFIG = {
     "image_edit_model": "google/gemini-2.5-flash-image",
     "ytdlp_cookies": "",
     "capcut_drafts_dir": "",
+    "vegas_exe": "",
     "ffmpeg": "ffmpeg",
     "ffprobe": "ffprobe",
     "http_referer": "https://github.com/promptcut",

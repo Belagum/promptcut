@@ -16,11 +16,13 @@ import pc_dl  # noqa: E402
 import pc_draw  # noqa: E402
 import pc_edit  # noqa: E402
 import pc_media  # noqa: E402
+import pc_nle  # noqa: E402
 import pc_openrouter as orr  # noqa: E402
 import pc_plan  # noqa: E402
 import pc_render  # noqa: E402
 import pc_stock  # noqa: E402
 import pc_subs  # noqa: E402
+import pc_timeline  # noqa: E402
 from pc_common import (CONFIG_PATH, DEFAULT_CONFIG, api_key, die, have, info, load_config,
                        save_config, spend_total)  # noqa: E402
 
@@ -106,6 +108,7 @@ def cmd_doctor(args):
         checks["edge_tts"] = True
     except ImportError:
         checks["edge_tts"] = False
+    checks["nle"] = pc_nle.installed(cfg)
     problems = []
     if not checks["ffmpeg"]:
         problems.append("ffmpeg missing: run 'promptcut setup', or winget install Gyan.FFmpeg")
@@ -527,6 +530,28 @@ def cmd_capcut_drafts(args):
               "candidates": [str(p) for p in pc_capcut.default_drafts_dirs()]})
 
 
+def cmd_nle_from_plan(args):
+    cfg = load_config()
+    plan, wd = _plan_pipeline(args, cfg)
+    if args.use_clips and not any(s.get("clip_file") for s in plan["shots"]):
+        die("--use-clips needs rendered clips: run 'build --plan ...' first")
+    out = Path(args.out).expanduser() if args.out else wd / "export"
+    tl = pc_timeline.from_plan(plan, wd, use_clips=args.use_clips, transitions=not args.no_transitions,
+                               name=args.name, out_dir=out, cfg=cfg)
+    if args.timeline_only:
+        out_json({"timeline": str(out / "timeline.json"), "tracks": len(tl["tracks"]),
+                  "duration": tl["duration"]})
+        return
+    out_json(pc_nle.export(tl, args.target, out, run=args.run, cfg=cfg))
+
+
+def cmd_nle_build(args):
+    cfg = load_config()
+    tl = pc_timeline.load_spec(args.spec, cfg)
+    out = Path(args.out).expanduser() if args.out else Path(args.spec).expanduser().resolve().parent
+    out_json(pc_nle.export(tl, args.target, out, run=args.run, cfg=cfg))
+
+
 def cmd_spend(args):
     from pc_common import SPEND_LOG
     rows = []
@@ -812,6 +837,26 @@ def build_parser():
 
     sp = add("capcut-drafts", cmd_capcut_drafts, "locate the CapCut drafts folder")
     sp.add_argument("--drafts-dir")
+
+    nle_targets = list(pc_nle.TARGETS) + ["all"]
+    sp = add("nle-from-plan", cmd_nle_from_plan,
+             "Premiere Pro / DaVinci Resolve / VEGAS Pro project from a video plan")
+    sp.add_argument("--plan", required=True)
+    sp.add_argument("--target", required=True, choices=nle_targets)
+    sp.add_argument("--name")
+    sp.add_argument("--out", help="output folder, default <plan>_build/export")
+    sp.add_argument("--use-clips", action="store_true",
+                    help="place the rendered clips instead of stills with motion keyframes")
+    sp.add_argument("--no-transitions", action="store_true", help="hard cuts instead of dissolves")
+    sp.add_argument("--run", action="store_true", help="vegas: start VEGAS Pro with the script")
+    sp.add_argument("--timeline-only", action="store_true", help="stop after timeline.json")
+    sp.set_defaults(stage="none", fake=False, workers=1, force=False)
+
+    sp = add("nle-build", cmd_nle_build, "editor project from a timeline.json, see the nle-export skill")
+    sp.add_argument("--spec", required=True)
+    sp.add_argument("--target", required=True, choices=nle_targets)
+    sp.add_argument("--out")
+    sp.add_argument("--run", action="store_true")
 
     sp = add("spend", cmd_spend, "how much was spent on APIs")
     sp.add_argument("--tail", type=int, default=20)
