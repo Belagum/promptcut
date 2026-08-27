@@ -7,8 +7,9 @@ You say "make me a 40-second vertical video about the Voyager probes, calm
 narrator, subtitles". Claude writes the storyboard, generates the voiceover,
 generates or finds a picture for every line, animates the stills, lays a music
 bed under the narration, burns the subtitles and renders the mp4. If you'd
-rather finish by hand, it writes a CapCut project instead, with every clip,
-subtitle and effect already on the timeline.
+rather finish by hand, it writes a CapCut, Premiere Pro, DaVinci Resolve or
+VEGAS Pro project instead, with every clip, motion keyframe, subtitle and effect
+already on the timeline.
 
 It is not a single pipeline you have to feed. It is ~30 small commands. "Cut the
 pauses out of this recording", "make this 16:9 clip vertical", "put this music
@@ -97,6 +98,16 @@ filter tracks, plus transitions (1137 of them), scene effects (1583), filters
 volume, styled text with animations, and imported SRT subtitles. Effect names are
 searchable, so Claude looks them up instead of hallucinating them.
 
+**Premiere Pro, DaVinci Resolve, VEGAS Pro.** The same storyboard as an editable
+project: FCP7 XML for Premiere and Resolve, a generated C# script (plus xml) for
+VEGAS. Stills keep their Ken Burns as scale/position keyframes (pan/crop in
+VEGAS), voiceover, sfx and music sit on their own tracks with the ducking curve
+as level keyframes, overlay titles become PNG cards, every shot gets a marker,
+and the subtitles travel as an SRT the editor imports natively. A hand-written
+`timeline.json` goes the same way for cuts that never had a plan, and the
+`nle-export` skill doubles as the how-to Claude consults when you ask how to
+import, relink or restyle in those editors.
+
 **Subtitles.** Split at sentence and clause boundaries, balanced across two
 lines, timed to the actual voice audio. Burned as ASS with an outline, and
 written as a `.srt` next to the video.
@@ -146,10 +157,12 @@ plugins/promptcut/
   .claude-plugin/plugin.json       plugin manifest
   skills/video-toolbox/            how Claude drives the toolbox
   skills/capcut-draft/             CapCut draft spec and effect lookup
-  commands/                        /promptcut:video, :shorts, :edit, :capcut, :setup
+  skills/nle-export/               Premiere / Resolve / VEGAS export and editor how-to
+  commands/                        /promptcut:video, :shorts, :edit, :capcut, :premiere, :resolve, :vegas, :setup
   scripts/promptcut.py             CLI entry point
-  scripts/pc_*.py                  plan, media, render, subs, stock, capcut, edit
+  scripts/pc_*.py                  plan, media, render, subs, stock, capcut, edit, timeline, xmeml, vegas, nle
   templates/                       starter storyboards
+tests/                             unittest suite, VEGAS API stub, xmeml calibration kit
 ```
 
 ## Known limits
@@ -159,6 +172,13 @@ plugins/promptcut/
 - CapCut transitions eat time from both neighbouring clips, which drifts video
   against a separate voiceover track. `capcut-from-plan` leaves them off unless
   you pass `--transitions`.
+- Premiere / Resolve / VEGAS projects reference media by absolute path inside
+  `<plan>_build/`; move the folder and you relink. The sizing units of each
+  editor are set per profile and still want one calibration pass on a real
+  install (`tests/calibrate.py`); `--use-clips` sidesteps it by placing the
+  rendered clips.
+- Those editors get clips, motion, audio, titles, markers and subtitles;
+  CapCut-only extras (masks, filters, effects, stickers) don't travel.
 - Reframing crops to centre. There's no face tracking.
 - Stock search needs internet; behind a strict egress allowlist the providers
   will simply fail to answer.

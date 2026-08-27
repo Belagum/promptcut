@@ -1,12 +1,12 @@
 {
   "name": "promptcut",
   "owner": { "name": "Si-autopaint" },
-  "description": "PromptCut: сборка видео по промпту (озвучка + картинки + ffmpeg-рендер + черновик CapCut).",
+  "description": "PromptCut: сборка видео по промпту (озвучка + картинки + ffmpeg-рендер + проекты CapCut, Premiere Pro, DaVinci Resolve, VEGAS Pro).",
   "plugins": [
     {
       "name": "promptcut",
       "source": "./plugins/promptcut",
-      "description": "Видео по промпту: раскадровка, TTS-озвучка, генерация картинок, движение/музыка/субтитры, рендер mp4, экспорт в CapCut.",
+      "description": "Видео по промпту: раскадровка, TTS-озвучка, генерация картинок, движение/музыка/субтитры, рендер mp4, экспорт в CapCut, Premiere Pro, DaVinci Resolve и VEGAS Pro.",
       "version": "0.1.0",
       "displayName": "PromptCut — видео по промпту",
       "author": { "name": "Si-autopaint" }

@@ -26,8 +26,12 @@ From an existing storyboard:
 python "${CLAUDE_PLUGIN_ROOT}/scripts/promptcut.py" capcut-from-plan --plan plan.json
 ```
 
-Stills + voiceover + music + sfx + SRT subtitles, one track each. `--use-clips`
-puts the already rendered motion clips on the timeline instead of stills.
+Stills with their Ken Burns as scale/position keyframes, overlay titles as PNG
+cards on a second video track, voiceover (a sentence group as one whole take),
+music with the ducking curve as volume keyframes, sfx, and SRT subtitles - one
+track each. It shares the timeline model with the Premiere/Resolve/VEGAS export
+(nle-export skill), so all four editors see the same cut. `--use-clips` puts the
+already rendered motion clips on the timeline instead of stills.
 `--transitions` adds CapCut transitions - they eat time from both neighbours, so
 the video drifts against the voiceover track; leave it off when sync matters.
 

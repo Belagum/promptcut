@@ -17,4 +17,5 @@ Steps, in order:
    `build --fake` and report duration and shot count.
 4. On approval run the real `build`. Report the mp4 path, duration and
    `spend_usd`.
-5. Offer `capcut-from-plan` if they may want to hand-tweak.
+5. Offer `capcut-from-plan` or `nle-from-plan --target premiere|resolve|vegas`
+   if they may want to hand-tweak in their editor.

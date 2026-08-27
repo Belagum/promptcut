@@ -2,12 +2,13 @@
   "name": "promptcut",
   "displayName": "PromptCut",
   "version": "0.1.0",
-  "description": "Turn a prompt into a finished video: storyboard, TTS voiceover, generated or stock images, Ken Burns motion, ducked music, subtitles, ffmpeg render. Plus ~30 granular editing commands and full CapCut draft export.",
+  "description": "Turn a prompt into a finished video: storyboard, TTS voiceover, generated or stock images, Ken Burns motion, ducked music, subtitles, ffmpeg render. Plus ~30 granular editing commands, full CapCut draft export and editable project export for Premiere Pro, DaVinci Resolve and VEGAS Pro.",
   "author": { "name": "PromptCut contributors" },
   "homepage": "https://github.com/promptcut/promptcut",
   "license": "MIT",
   "keywords": ["video", "video-editing", "montage", "tts", "openrouter", "ffmpeg",
-               "capcut", "shorts", "subtitles", "faceless-video"],
+               "capcut", "premiere-pro", "davinci-resolve", "vegas-pro", "fcp7-xml",
+               "shorts", "subtitles", "faceless-video"],
   "userConfig": {
     "openrouter_api_key": {
       "type": "string",

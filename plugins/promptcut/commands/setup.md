@@ -20,6 +20,9 @@ What setup cannot do by itself:
   need no key.
 - CapCut export: `capcut-drafts`; if the folder is not found, ask for
   CapCut → Settings → Draft location.
+- Premiere / Resolve / VEGAS export needs nothing extra; `doctor` lists the
+  installed editors under `nle`. Only VEGAS `--run` may need
+  `config --set vegas_exe=...` when the exe is not auto-detected.
 - If ffmpeg was just installed by winget, a new terminal may be needed for PATH.
 - If YouTube demands a login in `media-dl`:
   `config --set ytdlp_cookies=firefox` (or chrome/edge, or a cookies.txt path).

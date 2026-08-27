@@ -1,6 +1,6 @@
 ---
 name: video-toolbox
-description: Build and edit video from a prompt - storyboard, AI images or stock footage, TTS voiceover, Ken Burns motion with focus zoom, callout annotations, typography cards, music with ducking, subtitles, ffmpeg render, CapCut draft export. Also finds and downloads photos, music and sfx, and can look at frames and listen to audio to verify results. Use for any request about making, cutting, voicing, subtitling, reframing or assembling video and audio files.
+description: Build and edit video from a prompt - storyboard, AI images or stock footage, TTS voiceover, Ken Burns motion with focus zoom, callout annotations, typography cards, music with ducking, subtitles, ffmpeg render, CapCut draft export, Premiere Pro / DaVinci Resolve / VEGAS Pro project export. Also finds and downloads photos, music and sfx, and can look at frames and listen to audio to verify results. Use for any request about making, cutting, voicing, subtitling, reframing or assembling video and audio files.
 ---
 
 # PromptCut video toolbox
@@ -20,7 +20,7 @@ Reply to the person in their own language.
 ## Before the first job in a session
 
 Run `doctor`. It reports ffmpeg, the OpenRouter key, pycapcut, the CapCut drafts
-folder and stock keys, plus a `problems` list. Fix only what the job needs:
+folder, installed editors (`nle`) and stock keys, plus a `problems` list. Fix only what the job needs:
 a talking-head cut needs ffmpeg alone, image generation needs the key. If the
 problems are missing packages or ffmpeg, run `setup` - it installs them itself;
 only keys need the person.
@@ -48,7 +48,9 @@ narrated explainers, ad reads.
 4. `build --plan plan.json` for real. Media is cached by content hash, so
    re-running after a text edit only pays for what changed.
 5. Report the mp4 path, the duration and `spend_usd`. Offer the CapCut draft
-   (`capcut-from-plan`) if they may want to tweak by hand.
+   (`capcut-from-plan`) or an editor project (`nle-from-plan --target
+   premiere|resolve|vegas`, see the nle-export skill) if they may want to tweak
+   by hand.
 
 Iterating: edit `plan.json` and run `build` again. Add `--force` only to
 deliberately re-pay for media. `--stage render` re-renders from cached media.
@@ -129,7 +131,7 @@ Setup and info
 |---|---|
 | `doctor` | environment, keys, CapCut folder, problems |
 | `setup [--upgrade]` | auto-install missing pip deps and ffmpeg; `--upgrade` refreshes yt-dlp etc |
-| `config --set key=value` | image_model, tts_model, tts_voice, edge_voice, capcut_drafts_dir, ffmpeg |
+| `config --set key=value` | image_model, tts_model, tts_voice, edge_voice, capcut_drafts_dir, vegas_exe, ffmpeg |
 | `keys --set pexels=... freesound=...` | stock provider keys |
 | `models --kind image\|audio\|text` | live OpenRouter model list with prices |
 | `spend` | what the APIs cost so far |
@@ -201,6 +203,8 @@ Assembly and handoff
 | `capcut-build --spec spec.json` | arbitrary CapCut draft, see the capcut-draft skill |
 | `capcut-effects --type transition --search glitch` | find effect names |
 | `capcut-drafts` | where CapCut keeps drafts |
+| `nle-from-plan --plan plan.json --target premiere\|resolve\|vegas\|all [--use-clips] [--run]` | Premiere / Resolve / VEGAS project from the storyboard, see the nle-export skill |
+| `nle-build --spec timeline.json --target ...` | editor project from a hand-written timeline |
 
 ## Recipes
 
@@ -229,7 +233,9 @@ for a vertical cut.
 `subs-burn`.
 
 **Hand-off for manual polish.** `build` for the mp4, then `capcut-from-plan` so
-they can retime and restyle in CapCut with the same media.
+they can retime and restyle in CapCut with the same media. For Premiere, Resolve
+or VEGAS: `nle-from-plan --target ...` - same media, editable motion keyframes,
+SRT subtitles; the result's `next_steps` tell how to import.
 
 **Dramatic zoom + callout on a photo.** Read the photo yourself (or
 `ask ... --json` for exact coords), `annotate` a circle/arrow onto the still,

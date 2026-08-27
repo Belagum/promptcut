@@ -3,3 +3,4 @@ pycapcut>=0.1        # CapCut draft export
 edge-tts>=6.1        # free voiceover instead of paid TTS
 pillow>=10.0         # annotate (callouts) and card (typography)
 yt-dlp>=2024.1       # media-dl: fetch reference clips, music, sfx from the web
+num2words>=0.5       # digit-aware transcript matching when verifying tts takes
