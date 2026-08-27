@@ -334,57 +334,91 @@ def build_spec(spec: dict, *, cfg: dict | None = None, drafts: str | None = None
     return {"draft": target, "name": name, **counts}
 
 
+def _motion_keyframes(clip: dict, size) -> tuple:
+    import pc_timeline  # noqa: PLC0415
+    m = clip["media"]
+    if not m.get("width") or not m.get("height"):
+        return None, []
+    w, h = size
+    sw, sh = m["width"], m["height"]
+    fit = min(w / sw, h / sh)
+    path = pc_timeline.motion_path(clip.get("motion"), pc_timeline.motion_span(clip))
+    if not clip.get("motion"):
+        path = path[:1]
+    pts = []
+    for t, z, u, v in path:
+        left, top, ww, wh = pc_timeline.window_rect(clip, size, z, u, v)
+        s = w / ww
+        dx = (sw / 2 - (left + ww / 2)) * s
+        dy = (sh / 2 - (top + wh / 2)) * s
+        pts.append((t, round(s / fit, 5), round(dx / (w / 2), 5) or 0.0, round(-dy / (h / 2), 5) or 0.0))
+    if len({p[1:] for p in pts}) == 1:
+        _, scale, x, y = pts[0]
+        if abs(scale - 1) < 1e-4 and abs(x) < 1e-4 and abs(y) < 1e-4:
+            return None, []
+        return {"scale": scale, "x": x, "y": y}, []
+    kfs = []
+    for t, scale, x, y in pts:
+        kfs += [{"prop": "uniform_scale", "at": t, "value": scale},
+                {"prop": "position_x", "at": t, "value": x},
+                {"prop": "position_y", "at": t, "value": y}]
+    return None, kfs
+
+
+def spec_from_timeline(tl: dict) -> dict:
+    import pc_timeline  # noqa: PLC0415
+    size = (int(tl["size"][0]), int(tl["size"][1]))
+    tracks = []
+    for track in tl["tracks"]:
+        segs = []
+        for clip in track.get("clips") or []:
+            speed = float(clip.get("speed") or 1.0)
+            conf = {"file": clip["file"], "start": clip["start"], "duration": clip["duration"]}
+            if clip.get("source_in") or speed != 1.0:
+                conf["source_in"] = float(clip.get("source_in") or 0.0)
+                conf["source_duration"] = round(float(clip["duration"]) * speed, 3)
+                conf["speed"] = speed
+            if track["type"] == "video":
+                clip_settings, kfs = _motion_keyframes(clip, size)
+                if clip_settings:
+                    conf["clip"] = clip_settings
+                for t, a in clip.get("opacity") or []:
+                    kfs.append({"prop": "alpha", "at": t, "value": float(a)})
+                if kfs:
+                    conf["keyframes"] = kfs
+                tr = clip.get("transition")
+                if tr:
+                    conf["transition"] = "dissolve"
+                    conf["transition_dur"] = float(tr.get("duration") or 0.4)
+            else:
+                gain = float(clip.get("gain_db") or 0.0)
+                conf["volume"] = round(pc_timeline.db_to_gain(gain), 5)
+                if clip.get("fade_in"):
+                    conf["fade_in"] = clip["fade_in"]
+                if clip.get("fade_out"):
+                    conf["fade_out"] = clip["fade_out"]
+                if clip.get("levels"):
+                    conf["keyframes"] = [{"at": t, "value": round(pc_timeline.db_to_gain(gain + db), 5)}
+                                         for t, db in clip["levels"]]
+            segs.append(conf)
+        tracks.append({"type": track["type"], "name": str(track.get("name") or track["type"]).lower(),
+                       "segments": segs})
+    spec = {"name": tl["name"], "size": list(size), "fps": tl["fps"], "tracks": tracks}
+    srt = (tl.get("subtitles") or {}).get("srt")
+    if srt:
+        style = (tl.get("subtitles") or {}).get("style") or {}
+        spec["srt"] = {"file": srt, "track": "subs", "size": 7.5,
+                       "color": style.get("color", "FFFFFF"), "bold": True, "align": 1}
+    return spec
+
+
 def spec_from_plan(plan: dict, wd: Path, *, use_clips: bool = False,
                    name: str | None = None, transitions: bool = False) -> dict:
-    video, audio, sfx = [], [], []
-    for i, shot in enumerate(plan["shots"]):
-        src = (shot.get("clip_file") if use_clips
-               else shot.get("video_file") or shot.get("image_file"))
-        if not src:
-            continue
-        conf = {
-            "file": src, "start": shot["start"],
-            "duration": shot["duration"],
-            "animation_in": {"zoom_in": "轻微放大", "zoom_out": "缩小", "pan_left": "向左滑动",
-                             "pan_right": "向右滑动", "pan_up": "向上滑动",
-                             "pan_down": "向下滑动"}.get(shot.get("motion"), None),
-            "animation_in_dur": min(1.2, shot["duration"] * 0.9),
-        }
-        if not use_clips:
-            conf["background"] = {"type": "blur"}
-        # CapCut transitions consume time from both neighbours, which would drift the
-        # voiceover track; opt in only when exact sync does not matter.
-        if transitions and shot.get("transition") not in (None, "cut") and i < len(plan["shots"]) - 1:
-            conf["transition"] = "dissolve"
-            conf["transition_dur"] = shot.get("t_out") or 0.4
-        video.append({k: v for k, v in conf.items() if v is not None})
-        if shot.get("vo_file"):
-            audio.append({"file": shot["vo_file"], "start": shot["vo_start"],
-                          "duration": shot["vo_duration"]})
-        if shot.get("sfx"):
-            sfx.append({"file": shot["sfx"], "start": shot["start"], "duration": 2.0,
-                        "volume": 10 ** (float(shot.get("sfx_gain_db", -8)) / 20)})
-    tracks = [{"type": "video", "name": "main", "segments": video},
-              {"type": "audio", "name": "vo", "segments": audio}]
-    music = (plan.get("music") or {}).get("file")
-    if music:
-        tracks.append({"type": "audio", "name": "music", "segments": [{
-            "file": str(music), "start": 0, "duration": plan["total_duration"],
-            "volume": 10 ** (float(plan["music"].get("gain_db", -21)) / 20),
-            "fade_in": 1.2, "fade_out": float(plan["music"].get("fade", 2.0))}]})
-    if sfx:
-        tracks.append({"type": "audio", "name": "sfx", "segments": sfx})
-    spec = {
-        "name": name or f"promptcut_{plan.get('project', 'draft')}",
-        "size": [plan["width"], plan["height"]], "fps": plan["fps"], "tracks": tracks,
-    }
-    srt = wd / "subs.srt"
-    if not srt.exists():
-        import pc_subs
-        pc_subs.build_srt(plan, srt)
-    sub = plan.get("subtitles") or {}
-    spec["srt"] = {"file": str(srt), "track": "subs", "size": 7.5,
-                   "color": sub.get("color", "FFFFFF"), "bold": True, "align": 1}
+    import pc_timeline  # noqa: PLC0415
+    tl = pc_timeline.from_plan(plan, wd, use_clips=use_clips, transitions=transitions,
+                               name=name, cfg=load_config())
+    tl["subtitles"]["style"] = {"color": (plan.get("subtitles") or {}).get("color", "FFFFFF")}
+    spec = spec_from_timeline(tl)
     (wd / "capcut.spec.json").write_text(json.dumps(spec, ensure_ascii=False, indent=2),
                                          encoding="utf-8")
     return spec

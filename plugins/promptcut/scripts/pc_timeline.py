@@ -12,6 +12,7 @@ DUCK_RELEASE = 0.4
 TITLE_FADE = 0.2
 MUSIC_FADE_IN = 1.2
 TRACK_TYPES = ("video", "audio")
+IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff"}
 
 
 def frames(t, fps) -> int:
@@ -168,7 +169,7 @@ def hydrate(tl: dict, cfg: dict | None = None) -> dict:
             if not clip.get("media"):
                 clip["media"] = probe_media(clip["file"], cfg, cache)
             if track.get("type") == "video" and not clip.get("kind"):
-                clip["kind"] = "video" if clip["media"]["duration"] > 0 else "image"
+                clip["kind"] = "image" if Path(clip["file"]).suffix.lower() in IMAGE_EXT else "video"
     return tl
 
 
@@ -270,7 +271,7 @@ def from_plan(plan: dict, wd: Path, *, use_clips: bool = False, transitions: boo
     import pc_subs  # noqa: PLC0415
     cfg = cfg or load_config()
     pc_render.finalize_timeline(plan)
-    out = Path(out_dir).expanduser() if out_dir else wd / "export"
+    out = (Path(out_dir).expanduser() if out_dir else wd / "export").resolve()
     (out / "overlays").mkdir(parents=True, exist_ok=True)
     w, h, fps = plan["width"], plan["height"], plan["fps"]
     total = float(plan["total_duration"])

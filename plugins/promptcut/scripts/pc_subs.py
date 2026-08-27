@@ -124,13 +124,14 @@ def _ass_time(t: float) -> str:
 
 
 def build_srt(plan: dict, path: Path) -> Path:
+    body = [c for c in cues(plan) if not c[2].startswith("{OVERLAY}")]
     rows = []
-    n = 0
-    for start, end, text in cues(plan):
-        if text.startswith("{OVERLAY}"):
+    for i, (start, end, text) in enumerate(body):
+        if i + 1 < len(body):
+            end = min(end, body[i + 1][0])
+        if end <= start:
             continue
-        n += 1
-        rows.append(f"{n}\n{fmt_ts(start, True)} --> {fmt_ts(end, True)}\n"
+        rows.append(f"{len(rows) + 1}\n{fmt_ts(start, True)} --> {fmt_ts(end, True)}\n"
                     f"{text.replace(chr(92) + 'N', chr(10))}\n")
     path.write_text("\n".join(rows), encoding="utf-8")
     return path
