@@ -28,8 +28,7 @@ and Claude picks it.
    or straight from GitHub:
 
    ```
-   /plugin marketplace add <your-github-user>/promptcut
-   /plugin install promptcut@promptcut
+   /plugin marketplace add Belagum/promptcut
    ```
 
 2. Run `/promptcut:setup`. It installs what it can on its own — pillow, yt-dlp,
