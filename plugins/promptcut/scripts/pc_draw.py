@@ -156,6 +156,36 @@ def annotate(src, out, shapes, cfg: dict | None = None) -> dict:
     return {"file": str(out), "shapes": len(shapes), "layers": len(groups)}
 
 
+def title_png(text: str, w: int, h: int, out, sub: dict | None = None) -> Path:
+    Image, _, ImageDraw, _ = _pil()
+    sub = sub or {}
+    size = int((sub.get("size") or int(h * 0.045)) * 1.25)
+    font = _font(size, sub.get("font_path"))
+    outline = int(sub.get("outline", 3)) + 1
+    avail = w * 0.88
+    lines, cur = [], ""
+    for word in " ".join(str(text).split()).split(" "):
+        probe = f"{cur} {word}".strip()
+        if cur and font.getlength(probe) > avail:
+            lines.append(cur)
+            cur = word
+        else:
+            cur = probe
+    if cur:
+        lines.append(cur)
+    im = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    y = h * 0.06
+    for line in lines:
+        d.text((w / 2, y), line, font=font, fill=_rgba("#FFFFFF"), anchor="ma",
+               stroke_width=outline, stroke_fill=_rgba("#000000"))
+        y += size * 1.15
+    out = Path(out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    im.save(out)
+    return out
+
+
 def _wrap_lines(chars: list, font, gapw: float, divw: float, avail: float) -> list:
     lines, cur, cur_w = [], [], 0.0
     for item in chars:

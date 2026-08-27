@@ -86,15 +86,12 @@ def _adjust_focus(shot: dict, w: int, h: int, cfg: dict) -> None:
     if not focus or shot.get("motion") not in ("zoom_in", "zoom_out"):
         return
     import pc_edit  # noqa: PLC0415
+    import pc_timeline  # noqa: PLC0415
     meta = pc_edit.probe(shot["image_file"], cfg)
     sw, sh = meta.get("width"), meta.get("height")
     if not sw or not sh:
         return
-    crop_w = min(sw, sh * w / h)
-    crop_h = min(sh, sw * h / w)
-    fx = (focus[0] * sw - (sw - crop_w) / 2) / crop_w
-    fy = (focus[1] * sh - (sh - crop_h) / 2) / crop_h
-    shot["_focus"] = [round(min(1.0, max(0.0, fx)), 4), round(min(1.0, max(0.0, fy)), 4)]
+    shot["_focus"] = pc_timeline.cover_focus(focus, sw, sh, w, h)
 
 
 def _zoompan(shot: dict, plan: dict, frames: int) -> str:

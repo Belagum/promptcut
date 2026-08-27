@@ -57,7 +57,8 @@ def _plan_pipeline(args, cfg):
             by_id = {s["id"]: s for s in cached.get("shots", [])}
             for shot in plan["shots"]:
                 shot.update({k: v for k, v in by_id.get(shot["id"], {}).items()
-                             if k in ("vo_file", "vo_duration", "image_file", "clip_file")})
+                             if k in ("vo_file", "vo_duration", "image_file", "video_file",
+                                      "clip_file", "_g_first", "_g_last")})
     for shot in plan["shots"]:
         shot.setdefault("vo_duration", 0.0)
     pc_plan.compute_timeline(plan)
