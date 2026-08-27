@@ -68,7 +68,7 @@ class XmemlTest(unittest.TestCase):
         self.assertEqual(int(foot.findtext("duration")), round(2.0 * self.fps))
         self.assertEqual(int(foot.findtext("out")), round(2.0 * self.fps))
         self.assertEqual(param(foot, "scale").findtext("value"), "300")
-        self.assertEqual(param(self.shots("resolve")[3], "scale").findtext("value"), "100")
+        self.assertIsNone(param(self.shots("resolve")[3], "scale"))
 
     def test_pathurl(self):
         urls = [e.text for e in self.seq().iter("pathurl")]
